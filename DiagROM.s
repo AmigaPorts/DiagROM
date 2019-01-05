@@ -1,4 +1,4 @@
-;APS0000003200000032000253A600025D5700025D5700025D5700025D5700025D5700025D5700025D57
+;APS00000030000000300002B7900002C1410002C1410002C1410002C1410002C1410002C1410002C141
 ;
 ; DiagROM by John "Chucky" Hertell
 ;
@@ -8,13 +8,11 @@
 
 ; obscene words like "kuk" marks really bad code or temporary crap.. just look away.
 
-
-	
 VER:	MACRO
 	dc.b "1"			; Versionnumber
 	ENDM
 REV:	MACRO
-	dc.b "0"			; Revisionmumber
+	dc.b "1"			; Revisionmumber
 	ENDM
 
 VERSION:	MACRO
@@ -24,6 +22,9 @@ VERSION:	MACRO
 	REV
 	ENDM
 
+EDITION:	MACRO
+;	dc.b	" - Revision Edition"
+	ENDM
 
 PUSH:	MACRO
 	movem.l a0-a6/d0-d7,-(a7)	;Store all registers in the stack
@@ -50,9 +51,8 @@ rom_base:	equ $f80000		; Originate as if data is in ROM
 
 ; Then some different modes for the assembler
 
-
 rommode =	1				; Set to 1 if to assemble as being in ROM
-a1k =		0				; Set to 1 if to assemble as for being used on A1000 (64k memrestriction)
+a1k =		1				; Set to 1 if to assemble as for being used on A1000 (64k memrestriction)
 debug = 	0				; Set to 1 to enable some debugshit in code
 amiga = 	1 				; Set to 1 to create an amiga header to write the ROM to disk
 
@@ -91,6 +91,42 @@ HIRESSize:	equ	80*512
 						; If we are in ROM Mode and start.
 						; just save the file to disk.
 	ifne	amiga
+
+						; First lets fix some checksums
+	move.l	#Checksums-rom_base,d0
+	lea	a,a0
+	move.l	a0,a1
+	add.l	d0,a1				; a1 should now point to where checksums starts in memory
+	move.l	a1,d1				; Store startaddress of checksums in d1
+	move.l	d1,d2
+	add.l	#EndChecksums-Checksums,d2	; Store endaddress of checksums in d2
+	
+	clr.l	d3
+	
+	move.l	#7,d6
+
+.romcheckloop2:
+	move.l	#0,d0				; Clear D0 that calculates the checksum
+	move.l	#$3fff,d7
+.romcheckloop:
+	cmp.l	d1,a0
+	bhi	.higher
+	bra	.not
+.higher:					; ok we are above checksums.
+	cmp.l	d2,a0				; are we lower then end of checksums
+	bhi	.not				; no. so we will do checksumcalculations
+	add.l	#1,d3
+	add.l	#4,a0
+	bra	.nocalc
+.not:
+
+	add.l	(a0)+,d0
+.nocalc:
+	dbf	d7,.romcheckloop
+.endromcheck:
+	move.l	d0,(a1)+
+	dbf	d6,.romcheckloop2
+.slut:						; Checksums is calculated and put into code.
 SaveFile:
 	lea	.filnamn,a5
 	move.l	$4,a6
@@ -129,7 +165,7 @@ SaveFile:
 Dos:
 	dc.b	"dos.library",0
 
-a:	equ $180000		; YES! this is as dirty as yesterdays underwear, but needed..  do not do this if you care about other running stuff.. OK?
+a:	equ $45000000		; YES! this is as dirty as yesterdays underwear, but needed..  do not do this if you care about other running stuff.. OK?
 
 		ifeq	a1k
 b:	equ a+512*1024
@@ -206,6 +242,7 @@ Begin:
 	move.b	#3,$bfe201	
 	move.b	#0,$bfe001		; Powerled will go ON! so user can see that CPU works
 	move.b	#$40,$bfed01
+	move.w	#$ff00,$dff034
 
 					; Lets check status of mousebuttons at start.  AAAND we have ONE register not used in
 	move.l	#POSTBusError,$8
@@ -227,6 +264,10 @@ Begin:
 					
 	move.l	#0,d0			; Make sure D0 is cleared.
 	
+	lea	AnsiNull,a0		; Clear screen, clear ansi attributes, set default color
+	lea	.jmp0,a1
+	bra	DumpSerial		; Dump to serial, after it jump to where a1 points at.
+.jmp0:
 
 	btst	#6,$bfe001		; Check LMB port 1
 	bne	.NOP1LMB		; NOT pressed.. Skip to next
@@ -247,10 +288,8 @@ Begin:
 
 	move.l	d0,a4			; OK Store the result in a4 (YEAH I know it is not used for data.. but  no mem.. and only register not used)
 
-	lea	AnsiNull,a0		; Clear screen, clear ansi attributes, set default color
-	lea	.jmp0,a1
-	bra	DumpSerial		; Dump to serial, after it jump to where a1 points at.
-.jmp0:
+
+
 
 
 	lea	InitSerial,a0
@@ -282,13 +321,13 @@ Begin:
 	
 	move.l	#"<",d2
 	lea	.looptst1,a0
-	bra	Loopbacktest
+	bsr	Loopbacktest
 .looptst1:
 	move.w	#$777,$dff180		; Set screen to light grey
 	TOGGLEPWRLED
 	move.l	#">",d2
 	lea	.looptst2,a0
-	bra	Loopbacktest
+	jmp	Loopbacktest
 .looptst2:
 	move.w	#$555,$dff180		; Set screen to light grey
 	TOGGLEPWRLED
@@ -403,6 +442,33 @@ Begin:
 ;	so this will only really rely on Chipmem.  but does it work?  anyway. NO stack is allowed at this
 ;	point, meaning NO Stack, no subroutines only registers A0-A6 and D0-D7 and no memory.
 
+
+	lea	OvlTestTxt,a0
+	lea	.ovlprt,a1
+	bra	DumpSerial
+.ovlprt:
+	btst	#0,$bfe001
+	bne	.noovl
+	lea	OK,a0
+	lea	.ovldone,a1
+	bra	DumpSerial
+
+
+.noovl:						; OK OVL test failed. that means by misstake "stuck" LMB1 and LMB2 is false.
+	move.l	a4,d0
+	bclr	#0,d0				; Clear LMB1
+	bclr	#1,d0				; Clear LMB2
+	bset	#5,d0				; Set bit 5 as OVL ERROR
+	move.l	d0,a4				; store it back to a4
+	lea	FAILED,a0
+	lea	.ovldone,a1
+	bra	DumpSerial
+
+.ovldone:
+	lea	NewLineTxt,a0
+	lea	.ovlover,a1
+	bra	DumpSerial
+.ovlover:
 
 	PAROUT	#$fe			; Send #$fe to Paralellport.
 	lea	parfetxt,a0			; And explaining simliar text to serialport.
@@ -559,6 +625,7 @@ Begin:
 .jmp10:
 
 
+
 POSTDetectChipmem:
 	lea	$400,a6				; Lets scan memory, start at $400
 	move.l	#$33333333,(a6)			; Write a number that is NOT in the memcheck table. for shadowcheck
@@ -617,7 +684,7 @@ POSTDetectChipmem:
 	lea	RTxt,a0				; Prints text "Read:"
 	lea	.rtxtdone,a1
 	bra	DumpSerial
-	.rtxtdone:
+.rtxtdone:
 
 	move.l	d4,d1
 	lea	.rbindone,a3
@@ -702,7 +769,7 @@ POSTDetectChipmem:
 	lea	.startaddrdone,a1
 	bra	DumpSerial
 .startaddrdone:
-
+	move.l	d3,a7				; Store start of chipmem to a7
 	move.l	d3,d1
 	lea	.startdone,a3
 	bra	DumpHexLong
@@ -717,40 +784,40 @@ POSTDetectChipmem:
 	lea	.enddone,a3
 	bra	DumpHexLong
 .enddone:
+	lea	NewLineTxt,a0
+	lea	.nl,a1
+	bra	DumpSerial
+
+
+.nochipatall:
+	lea	NoChiptxt,a0
+	lea	.nl,a1
+	bra	DumpSerial
+
+.nl:
+
 					; At EXIT registers that are interesting:
 					; D0 = Number of usable 32Kb blocks
 					; D3 = First usable address
 					; A6 = Last usable address
 
 	
-	sub.l	#EndData-Variables,a6	; Subtract total chipmemsize, putting workspace at end of memory
-	sub.l	#2048,a6		; Subtract 2Kb more, "just to be sure"
-					; A6 from now on points to where diagroms workspace begins. do NOT change A6
-					; A6 is from now on STATIC
-
-	lea	Base1Txt,a0
-	lea	.base1,a1
-	bra	DumpSerial
-.base1:
-	move.l	a6,d1
-	lea	.base2,a3
-	bra	DumpHexLong
-.base2:
-	lea	Base2Txt,a0
-	lea	.base3,a1
-	bra	DumpSerial
-
-.nochipatall:
-	lea	NoChiptxt,a0
-	lea	.base3,a1
-	bra	DumpSerial
-
-
-.base3:
-
-
-
 ;----------- Chipmemtest done
+
+
+	move.l	a4,d1
+	btst	#0,d1				; Check if LMB was pressed, this means users asked for fastmem to be used, if found.
+	bne	.dofast
+	move.l	d1,a4				; store it back to a4
+
+
+	move.l	#-1,d1			; Set d1 to -1 telling machine we actually did skip fastmem test
+
+	cmp.l	#(EndData-Variables)/32768+1,d0
+	bgt	.skipfasttest		; ok we had enough chipmem
+					; so we are not happy with the amount of found chipmem
+.dofast:
+
 
 	PAROUT	#$fc			; Send $fd to parallelport
 	lea	parfctxt,a0		; And explaining simliar text to serialport.
@@ -761,57 +828,356 @@ POSTDetectChipmem:
 					; As we have several blocks to search. we do it in a subroutine instead of in-code as we did with chipmem
 					
 
-	move.l	d3,a7			; Store start of chipmem
+;	move.l	d3,a7			; Store start of chipmem
 
 	clr.l	d1
-	clr.l	d2
-	move.l	#0,a0
+	lea	$0,a0
+	lea	$0,a0
+	lea	$0,a3
+	lea	$0,a6
 
-	move.l	#"24BT",$4000700	; Write "TEST" to highmem
+					; as d0 is used as a "random" number in memcheck.  but d0 is also detected chipmem.
+					; lets eor this to make it more... "random"
+					; this detection is quite.. "poor" as it will stop when finding one block of ram. so fragmented memory only first block
+					; will be found
+
+	clr.l	d2			; We set d2 to 0.  if it is anything else than 0 after 24bit tests, we have32bit cpu
+
+
+
+	cmp.l	#" PPC",$f00090		; Check if the string "PPC" is located in rom at this address. if so we have a BPPC
+					; that will disable the 68k cpu onboard if memory  below $40000000 is tested.
+	beq	.bppc
+
+
+	move.l	#"NONE",$700
+	move.l	#"24BT",$40000700	; Write "24BT" to highmem
 	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.nop5
+	move.l	#1,d2			; blizzards etc will set this to 1..  apollo etc will not
+
+.nop5
+
+
+
+	move.l	#"NONE",$700
+	move.l	#"24BT",$2000700	; Write "24BT" to highmem
+	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.no24
+	move.l	#1,d2			; other cards will trigger here
+	
+.no24
+	move.l	#"NONE",$700
+	move.l	#"24BT",$4000700	; Write "24BT" to highmem
+	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.no24a
+	move.l	#1,d2			; blizzards etc will set this to 1..  apollo etc will not
+
+.no24a:
+
+	cmp.l	#0,d2			; if d2 is 0, we have 24 bit addressing
 	beq	.a1200done
 
-	move.l	#$4000000,a1		; Detect motherboardmem on A3000/4000
-	move.l	#$7ffffff,a2
-	lea	.a3k4kdone,a3
-	bra	DetectMBFastmem
-.a3k4kdone:
-	move.l	#$70000000,a1		; Detect memory on A1200/4000 accelerators
-	move.l	#$7affffff,a2
-	lea	.a1200done,a3
-	bra	DetectMBFastmem
-.a1200done:
-	move.l	#$200000,a1		; Detect memory on 24 bit range
-	move.l	#$9fffff,a2
-	lea	.24bitdone,a3
-	bra	DetectMBFastmem
-.24bitdone:
 
-	move.l	#$c00000,a1		; Detect memory on 24 bit range
-	move.l	#$c80000,a2
+	eor.l	#$01110000,d0
+
+	move.w	#$003,$dff180
+	lea	$1000000,a1		; Detect motherboardmem on A3000/4000
+	lea	$7ffffff,a2
+
+	lea	.a3k4kdone,a3
+	bra	DetectMemory
+.a3k4kdone:				; Again, the wonders without stack.  pasta-code.. :)
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det16
+	lea	FastFoundtxt,a0
+	lea	.det11,a1
+	bra	DumpSerial
+.det11:
+	move.l	d5,d1
+	lea	.det12,a3
+	bra	DumpHexLong
+.det12:
+	lea	MinusDTxt,a0
+	lea	.det13,a1
+	bra	DumpSerial
+.det13:
+	move.l	d4,d1
+	lea	.det14,a3
+	bra	DumpHexLong
+.det14:
+	lea	NewLineTxt,a0
+	lea	.det15,a1
+	bra	DumpSerial
+.det15:
+	move.l	d5,a3			;Start of mem
+	move.l	d4,a6			;end of mem
+	move.l	d3,d1
+.det16:
+
+	eor.l	#$01110000,d0
+
+	move.w	#$006,$dff180
+
+	lea	$8000000,a1		; Detect cpuboard on A3000/4000
+	lea	$10000000,a2
+
+
+	eor.l	#$01010000,d0
+
+
+	lea	.a3k4kcpudone,a3
+	bra	DetectMemory
+.a3k4kcpudone:
+
+	cmp.l	#0,a0			; if a0 is 0, we did not find memory
+	bne	.det20			; it wasnt, we did have memory
+					; ok we did not have memory, copy data from last detect
+	move.l	a3,a0
+	move.l	a6,a1
+	bra	.det26
+.det20:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+	lea	FastFoundtxt,a0
+	lea	.det21,a1
+	bra	DumpSerial
+.det21:
+	move.l	d5,d1
+	lea	.det22,a3
+	bra	DumpHexLong
+.det22:
+	lea	MinusDTxt,a0
+	lea	.det23,a1
+	bra	DumpSerial
+.det23:
+	move.l	d4,d1
+	lea	.det24,a3
+	bra	DumpHexLong
+.det24:
+	lea	NewLineTxt,a0
+	lea	.det25,a1
+	bra	DumpSerial
+.det25:
+	move.l	d5,a3			;Start of mem
+	move.l	d4,a6			;end of mem
+	move.l	d3,d1
+.det26:
+
+
+	eor.l	#$01010000,d0
+
+.bppc:	move.w	#$009,$dff180
+
+
+	lea	$40000000,a1
+	lea	$f0000000,a2
+	lea	.det1200cpu,a3
+
+	eor.l	#$11010000,d0
+
+
+	bra	DetectMemory
+.det1200cpu:
+	cmp.l	#0,a0			; if a0 is 0, we did not find memory
+	bne	.det30			; it wasnt, we did have memory
+					; ok we did not have memory, copy data from last detect
+	move.l	a3,a0
+	move.l	a6,a1
+	bra	.det36
+.det30:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+	lea	FastFoundtxt,a0
+	lea	.det31,a1
+	bra	DumpSerial
+.det31:
+	move.l	d5,d1
+	lea	.det32,a3
+	bra	DumpHexLong
+.det32:
+	lea	MinusDTxt,a0
+	lea	.det33,a1
+	bra	DumpSerial
+.det33:
+	move.l	d4,d1
+	lea	.det34,a3
+	bra	DumpHexLong
+.det34:
+	lea	NewLineTxt,a0
+	lea	.det35,a1
+	bra	DumpSerial
+.det35:
+	move.l	d5,a3			;Start of mem
+	move.l	d4,a6			;end of mem
+	move.l	d3,d1
+.det36:
+
+
+
+	eor.l	#$11010000,d0
+
+.a1200done:
+
+	move.w	#$00c,$dff180
+
+
+	lea	$200000,a1		; Detect memory on 24 bit range
+	lea	$9fffff,a2
+	lea	.24bitdone,a3
+	eor.l	#$10010000,d0
+
+	bra	DetectMemory
+.24bitdone:
+	cmp.l	#0,a0			; if a0 is 0, we did not find memory
+	bne	.det40			; it wasnt, we did have memory
+					; ok we did not have memory, copy data from last detect
+	move.l	a3,a0
+	move.l	a6,a1
+	bra	.det46
+.det40:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+	lea	FastFoundtxt,a0
+	lea	.det41,a1
+	bra	DumpSerial
+.det41:
+	move.l	d5,d1
+	lea	.det42,a3
+	bra	DumpHexLong
+.det42:
+	lea	MinusDTxt,a0
+	lea	.det43,a1
+	bra	DumpSerial
+.det43:
+	move.l	d4,d1
+	lea	.det44,a3
+	bra	DumpHexLong
+.det44:
+	lea	NewLineTxt,a0
+	lea	.det45,a1
+	bra	DumpSerial
+.det45:
+	move.l	d5,a3			;Start of mem
+	move.l	d4,a6			;end of mem
+	move.l	d3,d1
+.det46:
+
+
+	eor.l	#$10010000,d0
+
+	move.w	#$00f,$dff180
+
+	lea	$c00000,a1		; Detect memory on 24 bit range
+	lea	$c80000,a2
+
+
+	eor.l	#$10110000,d0
+
 	lea	.fakefastdone,a3
-	bra	DetectMBFastmem
+	bra	DetectMemory
 .fakefastdone:
 
+	move.w	#$aaa,$dff180		; make screen light grey
+
+	cmp.l	#0,a0			; if a0 is 0, we did not find memory
+	bne	.det50			; it wasnt, we did have memory
+					; ok we did not have memory, copy data from last detect
+	move.l	a3,a0
+	move.l	a6,a1
+	move.l	d1,d3
+	bra	.det55
+.det50:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+	lea	FastFoundtxt,a0
+	lea	.det51,a1
+	bra	DumpSerial
+.det51:
+	move.l	d5,d1
+	lea	.det52,a3
+	bra	DumpHexLong
+.det52:
+	lea	MinusDTxt,a0
+	lea	.det53,a1
+	bra	DumpSerial
+.det53:
+	move.l	d4,d1
+	lea	.det54,a3
+	bra	DumpHexLong
+.det54:
+	lea	NewLineTxt,a0
+	lea	.det55,a1
+	bra	DumpSerial
+.det55:
+	move.l	d3,d1
+.det56:
+
+	eor.l	#$10110000,d0
+
+	move.l	d1,d3
 
 
-	move.l	d1,d6			; Store size in d6 as Dumpserial uses d1
-	move.l	a0,a5			; Store detected mem to a5
+
+
+
+	cmp.l	#0,d1			; check if we had any fastmem
+	bne	.fast			; if it wasnt 0 , we had fastmem
+	lea	NoFastFoundtxt,a0
+	lea	.fast,a1
+	bra	DumpSerial
+
+
+.fast:
+	move.l	d3,d1
+
+
+
+	move.l	d1,d3			; Store size in d3 as Dumpserial uses d1
 	PAROUT	#$fb			; Send $fd to parallelport
 	lea	parfbtxt,a0		; And explaining simliar text to serialport.
 	lea	.jmp16,a1
 	bra	DumpSerial
 .jmp16:
-	move.l	d6,d1
-	move.l	a5,a0			; Restore important data from fastmemdetection
+	move.l	d3,d1
+	move.l	d4,a1			; Restore important data from fastmemdetection
+	move.l	d5,a0
 
+
+
+
+
+	;	memdetection done
+
+
+;	d0				; total chipmem *32
+;	d1				; total fastmem *64
+;	a0				; Start of Fastmemblock
+;	a1				; end of fastmemblock
+;	a4				; Startupbits (pressed mousebuttons etc)
+;	a7				; Start of chipmem
+
+.skipfasttest:
+
+
+	clr.l	d7			; Be sure d7 is clear
 
 	cmp.l	#(EndData-Variables)/32768+1,d0
 	bgt	.enoughchip		; ok we had enough chipmem
 					; so we are not happy with the amount of found chipmem
 
-	cmp.l	#(EndData-Variables)/16384+1,d1		; but was there enough FASTMEM??
-	bgt	.enoughfast		; if so, jump there  (should be enoughfast..)
+	cmp.l	#(EndData-Variables)/65535+1,d1		; but was there enough FASTMEM??
+	bgt	.enoughfast				; if so, jump there  (should be enoughfast..)
 
 					; OK we are is trouble.. not enough memory
 	cmp.l	#2,d0			; do we have extremly little chipmem
@@ -836,45 +1202,89 @@ POSTDetectChipmem:
 
 .enoughfast:
 
-	move.l	a5,a6			; We had enough fastmem, so lets set fastmem adress as base memory.
-	move.l	#1,a4			; Set do NODRAW mode.
-	move.l	d6,d1
-	move.l	a5,a0			; Restore important data from fastmemdetection
-	bra	code
+
+	move.l	a0,a6			; set d6 to contain the pointer to fastmem
+	move.l	d1,d4			; copy size in blocks to d2
+	asl.l	#8,d4			; Multiply  d2 with 64 to get correct number of kilobytes of fastmem.;
+	asl.l	#8,d4
+	move.l	a4,d7
+	bset.l	#6,d7			; Set "nodraw" on
+	move.l	d7,a4
+
+	bra	startcode
 
 	
-.enoughchip:
-					; OK we had enough chipmem avaible.
+.enoughchip:				; OK we had enough chipmem avaible.
+	move.l	a7,a6			; Copy pointer to first chipmem found to a6
+	move.l	d0,d4			; Copy size in blocks to d2
+	asl.l	#8,d4			; Multiply d0 with 32 as it contains number of blocks of 32K
+	asl.l	#7,d4
+	sub.l	#$400,d4
 	move.l	a4,d7
-
 	btst	#0,d7			; Check if LMB was pressed during boot
-	bne	.LMB
+	bne	.chipLMB
 
-	cmp.l	#$20000,a6		; check if a6 is in chipmem
-	ble	.wearechip		; if we are do not set to nodraw mode
-	move.l	#1,d7			; Set d7 to non 0 mode to force "nodraw" mode.
+;	cmp.l	#$20000,a6		; check if a6 is in chipmem
+;	ble	.wearechip		; if we are do not set to nodraw mode
+;	move.l	#1,d7			; Set d7 to non 0 mode to force "nodraw" mode.
 .wearechip:
+
+
 	bra	startcode		; Start ROM for real, now with memory.
 	
-.LMB:					; LMB Pressed so we force chipmem if avaible, and if not just turn off screenstuff etc.
-	move.l	#1,d7			; OK we are in a nodraw mode..
-	
-	cmp.l	#0,a5			; Was there any useful fastmem
-	beq	.nofast
 
-	move.l	a5,a6			; OK we had fastmem, set it as baseadress
+.chipLMB:				; LMB Pressed so we force chipmem if avaible, and if not just turn off screenstuff etc.
+
+
+	move.l	a4,d7
+	bset.l	#6,d7			; Set "nodraw" on
+	move.l	d7,a4
+	
+	cmp.l	#0,d1			; Was there any useful fastmem
+	beq	.nofast
+	bra	.enoughfast
+;	move.l	a5,a6			; OK we had fastmem, set it as baseadress
 .nofast:				; we didnt have any fastmem, lets use chipmem but skip screenstuff.
+
+
+
 startcode:
+	move.l	a4,d7
+	btst	#2,d7
+	bne	.rmb
+
+	add.l	d4,a6			; add total size of memory to a6, so a6 now points to END of memory
+	sub.l	#(EndData-Variables)+2048,a6	; Now subtract the needed space for workspace, plus extra 2k "safespace"
+.rmb:
+						; Basememory is now set!
+
+
+	move.l	d1,d3
+	lea	Base1Txt,a0
+	lea	.base1,a1
+	bra	DumpSerial
+.base1:
+	move.l	a6,d1
+	lea	.base2,a3
+	bra	DumpHexLong
+.base2:
+	lea	Base2Txt,a0
+	lea	.base3,a1
+	bra	DumpSerial
+.base3:
+	move.l	d3,d1			; Printed workmem
+
+					; a6  now contains workspace
+
+
+
 	move.l	d1,d6			; Store size in d6 as Dumpserial uses d1
 	move.l	a0,a5			; Store detected mem to a1
-
- 	PAROUT	#$fa			; Set code to $fb to paralellport, NO chipmem avaible
-	lea	parfatxt,a0		; And explaining simliar text to serialport.
-	lea	.jmp,a1
+ 	PAROUT	#$fa			; Set code to $fa to paralellport
+	lea	parfatxt,a0		; Telling the user that memory is started to be used.
+	lea	.jmp,a1	
 	bra	DumpSerial
 .jmp:
-
-
 	move.l	d6,d1
 	move.l	a5,a0			; Restore important data from fastmemdetection
 	bra	code
@@ -973,17 +1383,20 @@ ERRORHALT2:
 .notnow:
 	bra	.endlessloop
 
+
+						; "real" code starts here.  we got detected memory etc.
+
 code:
 
-	move.l	a7,d3			; Copy start of chipmem (temporary stored in a7) do d3
+;	move.l	a7,d3			; Copy start of chipmem (temporary stored in a7) do d3
 
-	move.l	a6,a7			; ok.  we have found memory. so put stack there. BUT first put a6 to a7 (SP)
-	move.l	#Endstack-Variables,d6	; set d7 to the stacksize	
+	move.l	a6,a7
+	move.l	#Endstack-Variables,d6	; set d6 to the stacksize	
 	add.l	d6,a7			; and add stacksize so we have a stack
 	move.l	a7,a6			
 	add.l	#4,a6			; make a6 first usable address AFTER stack. for variables.
 
-	asl.l	#4,d1			; Multiply  d1 with 16 to get correct number of kilobytes of fastmem.;
+
 
 	clr.l	d2
 
@@ -1022,12 +1435,43 @@ code:
 	move.l	#Trap,$b4
 	move.l	#Trap,$b8
 	move.l	#Trap,$bc
+	move.b	#0,DISPAULA-V(a6)
 	TOGGLEPWRLED
 
 
 		else
 ; Code in NON-ROM mode
 code:
+
+
+	move.l	$8,SaveBusError		; This time to a routine that can present more data.
+	move.l	$c,SaveAddressError
+	move.l	$10,SaveIllegalError
+	move.l	$14,SaveDivByZero
+	move.l	$18,SaveChkInst
+	move.l	$1c,SaveTrapV
+	move.l	$20,SavePrivViol
+	move.l	$24,SaveTrace
+	move.l	$28,SaveUnimplInst
+	move.l	$2c,SaveUnimplInst2
+	move.l	$80,SaveTrap
+	move.l	$84,SaveTrap2
+	move.l	$88,SaveTrap3
+	move.l	$8c,SaveTrap4
+	move.l	$90,SaveTrap5
+	move.l	$94,SaveTrap6
+	move.l	$98,SaveTrap7
+	move.l	$9c,SaveTrap8
+	move.l	$a0,SaveTrap9
+	move.l	$a4,SaveTrap10
+	move.l	$a8,SaveTrap11
+	move.l	$ac,SaveTrap12
+	move.l	$b0,SaveTrap13
+	move.l	$b4,SaveTrap14
+	move.l	$b8,SaveTrap15
+	move.l	$bc,SaveTrap16
+
+
 
 	clr.b	$bfe001
 	clr.b	$bfe201
@@ -1064,6 +1508,7 @@ code:
 
 
 
+
 	move.l	a6,a0
 	move.l	a6,d2
 	add.l	#EndData-V,d2
@@ -1072,12 +1517,53 @@ code:
 	cmp.l	d2,a0
 	blo	.loop
 
+	move.l	d1,FastBlocksAtBoot-V(a6)	; Store the amount of fastmemblocks found at boot
+
+	asl.l	#6,d1			; Multiply  d1 with 64 to get correct number of kilobytes of fastmem.;
+
+
 	move.l	a4,d7
 
+	move.l	d7,PowerONStatus-V(a6)	; Save the Poweronstatus. buttons etc
 
-;	bset	#4,d7			; Set LOOPBACK	KUK
+	btst	#0,d7
+	beq	.NOP1LMB
+	btst	#6,$bfe001		; Check LMB port 1
+	bne	.NOP1LMB		; NOT pressed.. Skip to next
+	move.b	#1,STUCKP1LMB-V(a6)
+.NOP1LMB:
+	btst	#1,d7
+	beq	.NOP2LMB
+	btst	#7,$bfe001		; Check LMB port 2
+	bne	.NOP2LMB
+	move.b	#1,STUCKP2LMB-V(a6)
+.NOP2LMB:
+	btst	#2,d7
+	beq	.NOP1RMB
+	btst	#10,$dff016		; Check RMB port 1
+	bne	.NOP1RMB
+	move.b	#1,STUCKP1RMB-V(a6)
+.NOP1RMB:
+	btst	#3,d7
+	beq	.NOP2RMB
+	btst	#14,$dff016		; Check RMB port 2
+	bne	.NOP2RMB
+	move.b	#1,STUCKP2RMB-V(a6)
+.NOP2RMB:
+	btst	#5,d7			; Check if we had OVL error
+	bne	.OVLError
+	move.b	#0,OVLErr-V(a6)
+	bra	.noOVLError
+.OVLError:
+	move.b	#1,OVLErr-V(a6)
+	move.b	#1,STUCKP1LMB-V(a6)
+	move.b	#1,STUCKP2LMB-V(a6)
 
-	btst	#0,d7			; is d7 set? then we should not draw anything onscreen
+
+.noOVLError:
+	
+
+	btst	#6,d7			; is bit6 d7 set? then we should not draw anything onscreen
 	beq	.notset
 	move.b	#1,NoDraw-V(a6)
 
@@ -1086,7 +1572,7 @@ code:
 	btst	#1,d7			; Check if noserial is to be set
 	beq	.notset2
 
-	move.b	#1,NoSerial-V(a6)	; set it
+;	move.b	#1,NoSerial-V(a6)	; set it
 .notset2:
 	move.b	#0,LoopB-V(a6)
 
@@ -1124,7 +1610,8 @@ code:
 
 ;---------------------------------- This is more or less where it all starts and a system is up and running
 
-;	ifeq	rommode			; if we are in rommode, then do a loopbacktest here aswell... removed due to initbug.
+	bset	#1,$bfe001
+
 
 	lea	LoopSerTest,a0
 	lea	.dirtyjump,a1		; TECHNICALLY we do not need to do this dirty thing anymore, but just to
@@ -1157,19 +1644,14 @@ code:
 
 .loopbackdone:
 
-;	endc
-
 	cmp.b	#1,NoSerial-V(a6)	; Check if noserial is set
 	beq	.noser
 	cmp.b	#1,LoopB-V(a6)		; Check if loopbackadapter was attacjhed
 	beq	.noserloop		; in that case, no serial output
 	move.w	#2,SerialSpeed-V(a6)	; KUKEN
 	bsr	Init_Serial
-
-
-	lea	DetectRasterTxt,a0
-	bsr	SendSerial
 	bra	.ser
+
 .noserloop:
 	move.w	#5,SerialSpeed-V(a6)	; Set serialspeed to 5 ,(same as 0 but mark loopbackadapter)
 	move.b	#1,NoSerial-V(a6)
@@ -1177,6 +1659,10 @@ code:
 .noser:
 	move.w	#0,SerialSpeed-V(a6)	; Set Serialspeed to 0
 .ser:
+
+	lea	DetectRasterTxt,a0
+	bsr	SendSerial
+
 
 	move.b	$dff006,d0		; Load value of raster
 	bsr	WaitShort
@@ -1195,6 +1681,10 @@ code:
 	lea	FAILED,a0
 	bsr	SendSerial
 .rastercheckdone:
+
+
+
+
 
 	lea	NewLineTxt,a0
 	bsr	SendSerial
@@ -1235,6 +1725,7 @@ code:
 	bsr	SendSerial
 	lea	NewLineTxt,a0
 	bsr	SendSerial
+
 
 
  	PAROUT	#$f9		; Set code to $81 to paralellport, NOT ENOUGH chipmem avaible
@@ -1288,9 +1779,24 @@ code:
 		jsr	-228(a6)		;WaitBlit
 	        move.l  34(a6),ActiveView	;Store activeview for a clean exit
 	        sub.l   a1,a1
+
+
+
 	        jsr     -222(a6)        	;loadview(NULL) hell..this only works w. a6
 		jsr	-270(a6)		;WaitTOF()
 		jsr	-270(a6)		;WaitTOF()
+
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+		bsr	WaitLong
+
+
+
 	        move.l  4.w,a6
 		jsr     -132(a6)        	;forbid
 		move.l	$4,a6			;exec.library
@@ -1299,6 +1805,9 @@ code:
 
 		lea	V,a6
 		move.l	d0,sysstack
+
+		
+
 	endc
 
 	cmp.b	#0,NoDraw-V(a6)
@@ -1330,6 +1839,48 @@ code:
 	lea	NoDrawTxt,a0
 	bsr	SendSerial
 .Chip:
+	bsr	RomChecksum
+
+
+	ifne	rommode
+
+		move.l	#.cpureturn,a5
+		bsr	DetectCPU
+.cpureturn:
+
+		bsr	PrintCPU
+
+ 	endif
+
+
+	move.l	FastBlocksAtBoot-V(a6),d1
+
+	cmp.l	#-1,d1
+	bne	.notskippedfast
+
+
+	lea	FastDetectTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	bsr	DetFastMem
+	
+
+	move.l	FastMem-V(a6),d1
+	asl.l	#6,d1
+	move.l	d1,TotalFast-V(a6)
+
+
+.notskippedfast:
+
+
+
+
+
+	lea	IfSoldTxt,a0
+	move.l	#5,d1
+	bsr	Print
+
 
 	lea	InitSerial2,a0
 	move.l	#7,d1
@@ -1394,7 +1945,6 @@ code:
 
 
 MainLoop:
-
 	move.l	#0,a0
 	bsr	PrintMenu			; Print or update the menu
 
@@ -1462,6 +2012,34 @@ Exit:
 	move.l	irq6,$78
 	move.l	irq7,$7c
 
+	move.l	SaveBusError,$8		; This time to a routine that can present more data.
+	move.l	SaveAddressError,$c
+	move.l	SaveIllegalError,$10
+	move.l	SaveDivByZero,$14
+	move.l	SaveChkInst,$18
+	move.l	SaveTrapV,$1c
+	move.l	SavePrivViol,$20
+	move.l	SaveTrace,$24
+	move.l	SaveUnimplInst,$28
+	move.l	SaveUnimplInst2,$2c
+	move.l	SaveTrap,$80
+	move.l	SaveTrap2,$84
+	move.l	SaveTrap3,$88
+	move.l	SaveTrap4,$8c
+	move.l	SaveTrap5,$90
+	move.l	SaveTrap6,$94
+	move.l	SaveTrap7,$98
+	move.l	SaveTrap8,$9c
+	move.l	SaveTrap9,$a0
+	move.l	SaveTrap10,$a4
+	move.l	SaveTrap11,$a8
+	move.l	SaveTrap12,$ac
+	move.l	SaveTrap13,$b0
+	move.l	SaveTrap14,$b4
+	move.l	SaveTrap15,$b8
+	move.l	SaveTrap16,$bc
+
+
 	move.b	#$40,$bfe601
 	move.b	#$a0,$bfe701
 
@@ -1487,6 +2065,56 @@ Exit:
 	rts
 		endc
 	rts
+
+
+	
+RomChecksum:
+	lea	RomCheckTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	lea	Checksums,a1			; Load a1 with list of checksums
+	lea	rom_base,a5
+
+	move.l	#Checksums,d2			; store Checksumaddre in d1
+	move.l	#EndChecksums,d3		; store end of Checksumaddr in d2
+	move.l	#7,d6
+	move.l	#10,$404
+.romcheckloop2:
+	move.l	#0,d0				; Clear D0 that calculates the checksum
+	move.l	#$3fff,d7
+.romcheckloop:
+						; lets skip checksumcalc if we are in checksumvar area
+	cmp.l	d2,a5
+	bhi	.higher
+	bra	.not
+.higher:
+	cmp.l	d3,a5
+	bhi	.not
+	move.w	#$fff,$dff180
+	add.l	#1,$404
+						; ok we are in address of checksums. skip calc
+	add.l	#4,a5
+	bra	.nocalc
+.not:
+	add.l	(a5)+,d0
+.nocalc
+	dbf	d7,.romcheckloop
+.endromcheck:
+	cmp.l	(a1)+,d0			; Check if it fits stored checksum
+	bne	.nocheckok
+	move.l	#2,d1
+	bra	.checkok
+.nocheckok:
+	move.l	#1,d1
+.checkok:
+	bsr	binhex
+	bsr	Print
+	lea	SpaceTxt,a0
+	bsr	Print
+	dbf	d6,.romcheckloop2
+	rts
+
 
 SetMenuCopper:
 	lea	InitCOP1LCH,a0
@@ -1523,6 +2151,9 @@ InitStuff:
 	add.l	#MenuCopper-V,a0
 	add.l	#MenuBplPnt-RomMenuCopper,a0
 	bsr	FixBitplane
+
+	bset	#5,SCRNMODE-V(a6)		; Set bit in SCRNMODE, to tell that we are in PAL mode
+
 	rts
 
 ClearScreen:
@@ -1632,7 +2263,10 @@ GetInput:
 	bsr	GetMouseData
 
 	move.l	d0,d1
+	cmp.b	#0,DISPAULA-V(a6)
+	bne	.paulabad
 	bsr	GetCharSerial
+.paulabad:
 	cmp.b	#0,d0
 	beq	.noserial
 	move.b	d0,GetCharData-V(a6)
@@ -1647,7 +2281,10 @@ GetInput:
 
 .getkey:
 	move.l	d0,d1
+	cmp.b	#1,OVLErr-V(a6)			; If we had OVL error, CIA is most likly broke. ignore keyboard
+	beq	.noovl
 	bsr	GetCharKey
+.noovl:
 	cmp	#0,d0
 	beq	.nokey
 
@@ -1729,7 +2366,17 @@ ReadSerial:					; Read serialport, and if anything there store it in the buffer
 
 GetMouseData:
 						; Get data from mouse.. ANY port.
+	move.w	$dff016,d1			; Read POTINP to d1
+	and.w	#$fe,d1				; mask out bit 0
+	cmp.b	#0,d1				; ok  if d1 is 0 we should have a working paula as bit 1-7 always shold be 0
+						; but a bad paula can give random numbers. so DiagROM messes up presses etc.
+						; so DISABLE all paulachecks.
+	beq	.paulaok
+	move.b	#1,DISPAULA-V(a6)		; ok it was not 0.  so lets disable paulastuff
 
+.paulaok:
+	cmp.b	#0,DISPAULA-V(a6)
+	bne	.paulabad
 	;First handle Y position
 	bsr	.CheckButton
 	move.l	d0,d4				; Store d0 in d4 temporary
@@ -1775,6 +2422,7 @@ GetMouseData:
 	bne	.YMove				; We have mousemovements in the Y Axis
 .DoneM:
 	move.l	d4,d0				; Restore d0 to keep flags
+.paulabad:
 	rts
 
 .XMove:
@@ -2487,6 +3135,16 @@ PutChar:
 	move.b	d0,$dff181
 	bra	.exitwithserial
 
+SameRow:
+						; Changes so we print on the same row. just clears the X column
+	PUSH
+	clr.b	Xpos-V(a6)
+	move.b	#$d,d0
+	bsr	rs232_out
+	POP
+	rts
+
+
 PrintChar:					; Puts a char on screen and add X, Y variables depending on char etc.
 						; INDATA: (Longwords expected)
 						;	D0 = Char
@@ -2723,7 +3381,7 @@ ScrollScreen:
 	move.l	640(a2),(a2)+	
 	dbf	d0,.loop
 
-	move.w	#140,d0
+	move.w	#142,d0
 .loop2:
 	clr.l	(a0)+
 	clr.l	(a1)+
@@ -3450,11 +4108,16 @@ UpdateStatus:
 	move.l	#25,d0				; Print CPU type
 	move.l	#31,d1
 	bsr	SetPos
-	lea	CPU,a0
+
+	move.l	CPUPointer-V(a6),a0
 	move.l	#7,d1
 	bsr	Print
 
-	move.l	#39,d0				; Print Chipmem
+;	move.l	CPUPointer-V(a6),a0
+;	move.l	#2,d1
+;	bsr	Print
+
+	move.l	#40,d0				; Print Chipmem
 	move.l	#31,d1
 	bsr	SetPos
 	move.l	TotalChip-V(a6),d0
@@ -3463,14 +4126,14 @@ UpdateStatus:
 	bsr	Print
 	lea	KB,a0
 	bsr	Print
-	move.l	#56,d0
+	move.l	#57,d0
 	move.l	#31,d1
 	bsr	SetPos
 	move.l	#7,d1
 	move.l	TotalFast-V(a6),d0
 	bsr	bindec
 	bsr	Print
-	move.l	#69,d0
+	move.l	#70,d0
 	move.l	#31,d1
 	bsr	SetPos
 	move.l	a6,d0
@@ -3509,6 +4172,176 @@ InitScreen:
 	clr.l	d1
 	bsr	SetPos
 	rts
+
+DumpClearSerial:				; Just read serialport, to empty it, this is pre-memory, so no return.
+						; a0 contains jumpaddress where to go after exiting
+	move.l	#1,d6				; load d6 with 1, so we run this, twice to be sure serialbuffer is cleared
+.loop:
+	move.w	#$4000,$dff09a
+	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
+	move.b	#$4f,$bfd000			; Set DTR high
+	move.w	#$0801,$dff09a
+	move.w	#$0801,$dff09c
+
+	move.l	#10000,d7
+.timeoutloop2
+	move.b	$bfe001,d0			;nonsenseread
+	cmp.l	#0,d7
+	beq	.exitloop
+	sub.l	#1,d7
+	move.w	$dff018,d0
+	btst	#14,d0				; Buffer full, we have a new char
+	beq	.timeoutloop2
+.exitloop:
+	dbf	d6,.loop
+	jmp	(a0)				; Jump to a0
+
+
+
+DumpSerial:				; This is only for PRE-Memory usage. Dumps a string to serialport.
+					; IN:
+					; a0 = String to put out on serial port.
+					; a1 = where to jump after code is run. Remember we have NO stack
+					; meaning that there is no place to store returnadresses for bsr/jsr
+
+
+	move.l	a4,d7				; Copy the value in A4 (temporary data of mousebutttons pressed) to d7
+	btst	#1,d7				; check if LMB on Joyport 1 was pressed. if so. skip serial output.
+;	bne	.exit				; it was pressed. skip all this
+;.ignore:
+	btst	#4,d7				; Check if we had loopback installed
+	bne	.nomore
+	move.w	#$4000,$dff09a
+	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
+	move.b	#$4f,$bfd000			; Set DTR high
+	move.w	#$0801,$dff09a
+	move.w	#$0801,$dff09c
+
+	clr.l	d7				; Clear d0
+.loop:
+	move.b	(a0)+,d7
+	cmp.b	#0,d7				; end of string?
+	beq	.nomore				; yes
+
+	move.l	#40000,d2			; Load d2 with a timeoutvariable. only test this number of times.
+						; IF CIA for serialport is dead we will not end up in a wait-forever-loop.
+						; and as we cannot use timers. we have to do this dirty style of coding...
+.timeoutloop:	
+	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
+	sub.l	#1,d2				; count down timeout value
+	cmp.l	#0,d2				; if 0, timeout.
+	beq	.endloop
+	move.w	$dff018,d1
+	btst	#13,d1				; Check TBE bit
+	beq.s	.timeoutloop
+.endloop:
+	move.w	#$0100,d1
+	move.b	d7,d1
+	move.w	d1,$dff030			; send it to serial
+	move.w	#$0001,$dff09c			; turn off the TBE bit
+
+	bra.s	.loop
+.exit:
+	jmp	(a1)				; AS we cannot use RTS (and bsr/jsr) jump here after we are done.
+.nomore:
+						; ok apparentlty fire on port1 was pressed. if port0 was also pressed. we assume bad CIA and ignore
+	btst	#0,d7
+;	bne	.ignore
+	bra	.exit
+
+DumpSerialChar:				; This is only for PRE-Memory usage. Dumps a string to serialport.
+					; IN:
+					; a0 = pointer to char to print
+					; a1 = where to jump after code is run. Remember we have NO stack
+					; meaning that there is no place to store returnadresses for bsr/jsr
+
+;	move.l	a4,d7				; Copy the value in A4 (temporary data of mousebutttons pressed) to d7
+;	btst	#1,d7				; check if LMB on Joyport 1 was pressed. if so. skip serial output.
+;	bne	.nomore				; it was pressed. skip all this
+;	btst	#4,d7				; Check if we had loopback installed
+;	bne	.nomore
+
+	move.w	#$4000,$dff09a
+	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
+	move.b	#$4f,$bfd000			; Set DTR high
+	move.w	#$0801,$dff09a
+	move.w	#$0801,$dff09c
+
+	clr.l	d7				; Clear d0
+	move.b	(a0)+,d7
+	move.l	#10000,d2			; Load d2 with a timeoutvariable. only test this number of times.
+						; IF CIA for serialport is dead we will not end up in a wait-forever-loop.
+						; and as we cannot use timers. we have to do this dirty style of coding...
+.timeoutloop:	
+	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
+	sub.l	#1,d2				; count down timeout value
+	cmp.l	#0,d2				; if 0, timeout.
+	beq	.endloop
+	move.w	$dff018,d1
+	btst	#13,d1				; Check TBE bit
+	beq.s	.timeoutloop
+.endloop:
+	move.w	#$0100,d1
+	move.b	d7,d1
+	move.w	d1,$dff030			; send it to serial
+	move.w	#$0001,$dff09c			; turn off the TBE bit
+.nomore:
+	jmp	(a1)				; AS we cannot use RTS (and bsr/jsr) jump here after we are done.
+
+
+DumpHexLong:
+					; Same as DumpHexByte but longword.
+					; A3 is jumppointer for exit
+	move.l	d1,d6
+	swap	d1
+	asr.l	#8,d1
+	lea	.byte1,a2
+	bra	DumpHexByte
+.byte1:
+	move.l	d6,d1
+	swap	d1
+	lea	.byte2,a2
+	bra	DumpHexByte
+.byte2:
+	move.l	d6,d1
+	asr	#8,d1
+	lea	.byte3,a2
+	bra	DumpHexByte		
+.byte3:
+	move.l	d6,d1
+	lea	.byte4,a2
+	bra	DumpHexByte
+.byte4:
+	jmp	(a3)
+
+DefaultVars:					; Set defualtvalues
+	move.l	a6,d0
+	add.l	#EndData-V,d0
+	move.l	d0,CheckMemEditScreenAdr-V(a6)
+	rts
+
+
+
+DumpHexByte:				; PRE MEM-CODE!  dumps content of BYTE in d1 to serialport-
+					; INDATA:
+					;	D1 = byte to print
+					;	A2 = address to jump after done
+
+	lea	bytehextxt,a0
+	clr.l	d2
+	move.b	d1,d2
+	asl	#1,d2
+	add.l	d2,a0
+	lea	.char1,a1
+	bra	DumpSerialChar
+.char1:
+	lea	.char2,a1
+	bra	DumpSerialChar
+.char2:
+	jmp	(a2)
+
+
+
 
 CheckMemory:
 						; Checks memory
@@ -4330,62 +5163,66 @@ CheckMemNewRow:
 .rowdone:	
 	rts
 
+MemTest:
+	bsr	ClearScreen
+	clr.l	MemTestPass-V(a6)
+	
+	lea	NewLineTxt,a0
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
 
-DetectMBFastmem:				; A very fast detection of fastmem made for startup before stackusage etc.
-						; INdata:
-						; d1 = total block of known working 16Kb fastmem blocks. (CLEAR before first usage)
-						; d2 = size of memory found at a0 (CLEAR before fist usage) (in number of 16k blocks)
-						; a0 = First usable address (CLEAR before first usage)
-						; a1 = First address to scan
-						; a2 = Address to end scan
-						; a3 = adress to jump to after we are done with this routine
-						;
-						; Detection is done that it checks one longword every 16k and assumes a working 16k block if successful)
+	lea	CheckMemRangeTxt,a0
+	move.l	#7,d1
+	bsr	Print				; Print checking memory from...
+	lea	NewLineTxt,a0
+	bsr	Print
 
-	clr.l	d3				; total size of memory found in this scan
-	clr.l	d4
-	clr.l	d5				; Will contain first memoryadress found
-.loop1:
-	lea	MEMCheckPattern,a5		; list of memcheck pattern
-	add.b	#4,d4				; just add a number, d4 is only for screenflash when a good longword is found
-.loop:
-	move.l	(a5)+,d7			; load next pattern to d7
-	move.l	d7,(a1)				; write d7 to memoryaddress to check
-	move.b	d7,$dff180
-	nop					; needed for 040
-	move.l	(a1),d6				; read the same address to d6
-	cmp.l	d6,d7				; compare if they are the same
-	bne	.checknext			; if not. go to check next block
-	cmp.l	#0,d7				; Check if d7 was 0, meaning we are done with out check of this longword
-	bne	.loop
+	lea	CheckMemNo,a0
+	move.l	#7,d1
+	bsr	Print				; Print checking memory from...
 
-	move.b	d4,$dff181			; just to make somewhat coloreffect onscreen so user can see that something is happening
+	move.l	MemTestPass-V(a6),d0
+	bsr	bindec
+	bsr	Print
 
-	cmp.l	#0,d5				; check if this is the first memoryblock we found that are working
-	bne	.notfirst			; nope, not first block
-	move.l	a1,d5				; store the current address to a5 as it is the first working address
-.notfirst:
-	add.l	#1,d3				; Add 1 to d3 for a working block
-.checknext:
-	add.l	#16384,a1			; add 16k to a1 for next memoryblock to scan
-	cmp.l	a1,a2				; check if we are finished
-	bgt	.loop1				; OK, we are not finished. lets check next block
+	lea	NewLineTxt,a0
+	bsr	Print
 
-						; OK  we are done with checking everyting
-	cmp.l	#0,a0				; check if a0 is 0, if not we already have memory that are usable
-	bne	.nomemneeded
-						; ok we had no working memory, lets tell what memory we have
-	cmp.l	#0,d5				; check if we actually did find any memory atall?
-	beq	.nomemneeded			; ok fuck it, we did not find any memory anyway
 
-	move.l	d5,a0				; we found memory and no memory detected before that. so make this detected
-						; memory as found block
-	move.l	d3,d2				; also store size of this block
+	lea	CheckMemCheckAdrTxt,a0
+	bsr	Print
 
-.nomemneeded:
-	add.l	d3,d1				; add this detected blocksize of total size of fastmem
-	jmp	(a3)				; we are done.  jump to what a3 points to.
 
+;	lea	NotImplTxt,a0
+;	move.l	#2,d1
+;	bsr	Print
+	bsr	.PrintMemRange
+	bsr	WaitPressed
+	bsr	WaitReleased
+	bra	MainMenu
+
+.PrintMemRange:
+	move.l	#21,d0
+	move.l	#3,d1
+	bsr	SetPos
+	move.l	#$13000,d0
+	bsr	binhex
+	move.l	#3,d1
+	bsr	Print
+
+
+	move.l	#34,d0
+	move.l	#3,d1
+	bsr	SetPos
+	move.l	#$23000,d0
+	bsr	binhex
+	move.l	#3,d1
+	bsr	Print
+
+	rts
 
 DetectMem:
 						; Detects memory
@@ -5368,7 +6205,7 @@ CheckDetectedMBMem:
 	clr.b	temp-V(a6)				; Clear tempvariable
 	clr.l	FirstMBMem-V(a6)
 	clr.l	MBMemSize-V(a6)
-	lea	$4000000,a0
+	lea	$1000000,a0
 	lea	$8000000,a1
 	bsr	DetectMem
 
@@ -5440,7 +6277,7 @@ CheckDetectedMBMem:
 	clr.l	FirstMBMem-V(a6)
 	clr.l	MBMemSize-V(a6)
 
-	lea	$40000000,a0
+	lea	$10000000,a0
 	lea	$80000000,a1
 	bsr	DetectMem
 
@@ -5551,23 +6388,6 @@ CheckExtended16MBMem:
 	bsr	CheckMemory
 	bsr	WaitButton
 	bra	MemtestMenu
-
-
-CheckExtendedMBMem:
-	bsr	ClearScreen
-	lea	MemtestExtMBMemTxt,a0
-	move.l	#2,d1
-	bsr	Print
-
-	move.l	#$4000000,d0
-	move.l	#$fffffff,d1
-
-	move.l	#1,d2
-	move.b	#0,CheckMemNoShadow-V(a6)
-	bsr	CheckMemory
-	bsr	WaitButton
-	bra	MemtestMenu
-
 
 CheckMemManual:
 	bsr	ClearScreen
@@ -5964,7 +6784,10 @@ CheckMemEdit:
 	bsr	.ClearCommandRow		; Clear the "goto" row.
 	bra	.loop
 
-.Cache:	bchg	#1,CPUCache-V(a6)		; Change status of Cacheflag
+.Cache:
+	cmp.b	#1,CPUGen-V(a6)			; Check if CPUGen is 010 or less
+	ble	.Refresh
+	bchg	#1,CPUCache-V(a6)		; Change status of Cacheflag
 	clr.l	d0
 
 	move.l	#34,d0
@@ -7007,7 +7830,7 @@ GFXTestScroll:
 	lea	TestPic,a1				; Set a1 to where testscreen is in ROM
 
 
-	move.w	#1023,d4
+	move.w	#1279,d4
 .loop2:
 	move.w	#39,d3
 .loop:
@@ -7035,7 +7858,7 @@ GFXTestScroll:
 
 .blit:
 	PUSH
-	move.w	#3,d6
+	move.w	#4,d6
 .blitloop:
 	move.w	#113,d4
 	move.l	d7,a0
@@ -7091,6 +7914,29 @@ GFXTestScroll:
 
 
 
+
+GFXTestRaster:
+	bsr	ClearScreen
+	move.l	#3,d1
+	lea	GFXtestRasterTxt,a0
+	bsr	Print
+	lea	GFXtestRasterTxt2,a0
+	bsr	Print
+
+.loopa:
+	bsr	GetInput
+	move.l	#70,d0
+	move.l	#160,d1
+.loop:
+	cmp.b	$dff006,d0
+	bne	.loop
+	add.b	#1,d0			; Wait for next rasterline
+	move.b	d0,$dff181
+	dbf	d1,.loop
+	move.w	#0,$dff180
+	cmp.b	#1,BUTTON-V(a6)
+	bne	.loopa
+	bra	GFXtestMenu
 
 
 
@@ -7518,16 +8364,541 @@ SystemInfoTest:
 	lea	Bytes,a0
 	bsr	Print
 
+	bsr	RomChecksum
+
+	lea	.CpuDone,a5
+	bsr	DetectCPU
+.CpuDone:
+	bsr	PrintCPU
+
+;	clr.l	d0
+;	move.b	CPUGen-V(a6),d0
+;	cmp.b	#4,d0
+;	blt	.no040
+;	move.l	#2,d1
+;	lea	EXPERIMENTAL,a0
+;	bsr	Print
+
+;	move.l	#DetMMU,$80
+;	trap	#0
+
+;	move.l	d6,d0
+;	move.l	#3,d1
+;	bsr	bindec
+;	bsr	Print
+
+.no040
+
+
+	move.l	#BusError,$8		; This time to a routine that can present more data.
+	move.l	#UnimplInst,$2c
+	move.l	#Trap,$80
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	lea	DebugROM,a0
+	move.l	#3,d1
+	bsr	Print
+
+	cmp.w	#$1114,$0
+	bne	.no1114at0
+	lea	YES,a0
+	move.l	#1,d1
+	bsr	Print
+	bra	.yes1114at0
+
+.no1114at0:
+	lea	NO,a0
+	move.l	#2,d1
+	bsr	Print
+.yes1114at0
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	lea	DebugROM2,a0
+	move.l	#3,d1
+	bsr	Print
+
+	cmp.w	#$1114,$f80000
+	bne	.no1114atf8
+	lea	YES,a0
+	move.l	#2,d1
+	bsr	Print
+	bra	.yes1114atf8
+
+.no1114atf8:
+	lea	NO,a0
+	move.l	#1,d1
+	bsr	Print
+.yes1114atf8:
+	lea	DebugROM3,a0
+	move.l	#3,d1
+	bsr	Print
+
+	cmp.w	#$1111,$f00000
+	bne	.no1111atf0
+	lea	YES,a0
+	move.l	#2,d1
+	bsr	Print
+	bra	.donerom
+
+.no1111atf0:
+	lea	NO,a0
+	move.l	#1,d1
+	bsr	Print
+.donerom:	
+
+	lea	StuckButtons,a0
+	move.l	#3,d1
+	bsr	Print
+
+	cmp.b	#0,STUCKP1LMB-V(a6)
+	beq	.nop1lmb
+	lea	InitP1LMBtxt,a0
+	move.l	#1,d1
+	bsr	Print
+.nop1lmb:
+	cmp.b	#0,STUCKP2LMB-V(a6)
+	beq	.nop2lmb
+	lea	InitP2LMBtxt,a0
+	move.l	#1,d1
+	bsr	Print
+.nop2lmb:
+	cmp.b	#0,STUCKP1RMB-V(a6)
+	beq	.nop1rmb
+	lea	InitP1RMBtxt,a0
+	move.l	#1,d1
+	bsr	Print
+.nop1rmb:
+	cmp.b	#0,STUCKP2RMB-V(a6)
+	beq	.nop2rmb
+	lea	InitP2RMBtxt,a0
+	move.l	#1,d1
+	bsr	Print
+.nop2rmb:
+	cmp.b	#0,DISPAULA-V(a6)
+	beq	.nobadpaula
+	lea	BadPaulaTXT,a0
+	move.l	#1,d1
+	bsr	Print
+.nobadpaula:
+	cmp.b	#0,OVLErr-V(a6)
+	beq	.noovlerr
+	lea	OvlErrTxt,a0
+	move.l	#1,d1
+	bsr	Print
+.noovlerr:
+
+	lea	NewLineTxt,a0
+	bsr	Print
 
 	bsr	WaitButton
 	bra	MainMenu
 	
 
+PrintCPU:
+						; Prints CPU Information
+	lea	CPUTxt,a0
+	move.l	#2,d1
+	bsr	Print
+
+	move.l	CPUPointer-V(a6),a0
+	move.l	#2,d1
+	bsr	Print
+
+	clr.l	d7
+	cmp.b	#5,CPUGen-V(a6)			; Check if we had 060 gen of CPU, if so, print revisionnumber
+	bne	.no060
+	move.b	CPU060Rev-V(a6),d7
+
+	lea	REVTxt,a0
+	bsr	Print
+	move.l	d7,d0
+	bsr	bindec
+	bsr	Print
+.no060:
+
+	lea	FPUTxt,a0
+	move.l	#2,d1
+	bsr	Print
+	move.l	FPUPointer-V(a6),a0
+	move.l	#2,d1
+	bsr	Print
+
+	lea	MMUTxt,a0
+	move.l	#2,d1
+	bsr	Print
+	clr.l	d0
+	move.b	MMU-V(a6),d0
+	cmp.b	#0,d0
+	beq	.nommu
+	lea	NOTCHECKED,a0
+	bra	.mmuprint
+.nommu:
+	lea	NO,a0
+.mmuprint:
+	bsr	Print
+	rts
+
+
+DetMMU:
+		; code by Toni Wilen
+	lea	.exit,a3
+	clr.l	d0
+	move.w	#$4000,d0
+	movec	d0,TC
+	nop
+	nop
+	movec	TC,d1
+	move.l	d1,d0
+	bsr	binhex
+	move.l	#1,d1
+	bsr	Print
+
+	moveq	#0,d7
+	moveq	#0,d6
+
+	move.l	#.bus,$8
+	move.l	#.fline,$2c
+	;lower 16M: do not cache anything
+	;(Compability for ACA500/plus with A1200 68040+ accelerators)
+	move.l	#$c040,d0
+	movec	d0,dtt0
+	movec	d0,itt0
+	movec	d0,dtt1
+	movec	d0,itt1
+
+	moveq	#1,d6
+	move.b	#1,$1000000	;should not case bus error
+	move.l	#$100e044,d0	;writeprotect 16M-32M, ignore supervisorbit
+	movec	d0,dtt0
+	moveq	#2,d6
+	move.b	#1,$1000000	;should cause bus error
+	moveq	#3,d6
+.exit:
+	move.l	#$c040,d0
+	movec	d0,dtt0
+	rte
+
+.fline:
+	; shouldtnt happen
+	move.l	a3,2(sp)
+	rte
+.bus:
+	move.l	a3,2(sp)
+	rte
 
 ;------------------------------------------------------------------------------------------
 
+DetectCPU:				; Detects CPU, FPU etc.
+					; Code more or less from romanworkshop.blutu.pl/menu/amiasm.htm
+					
+					; IB!  a5 Contains address to instruction after branch to here. so it can exit there
+					; if not correct cpu
+
+	move.l	#"TEST",$700		; Put "TEST" into $700
+	clr.l	PCRReg-V(a6)		; Clear PCRReg value
+	clr.b	CPU060Rev-V(a6)		; Clear 060 CPU Rev value
+	clr.b	MMU-V(a6)		; Clear the MMU Flag
+	clr.b	ADR24BIT-V(a6)		; Clear the 24Bit addressmode flag
+	cmp.l	#"TEST",$700		; Check if $700 is "TEST" if not.  we assume having memoroissues at lower chipmem.
+					; so CPU detection will just fail and crash.  put 680x0 as string of cpu.
+	bne	.nochip
+	clr.l	$700			; Clear $700
+
+	move.l	#"24AD",$4000700	; Write "24AD" to highmem $700
+	cmp.l	#"24AD",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit address.
+	bne	.no24bit
+	move.b	#1,ADR24BIT-V(a6)
+.no24bit:
+	moveq	#$0,d1			; Set CPU detected.  begin with "0" as 68000
+	move.l	#.notabove68k,$10	; Set illegal instruction to this
+
+	movec	VBR,d3			; Supported by 010+	dc.l	$4e7a3801		;movec VBR,d3	- move VBR to d3
+
+	moveq	#$10,d2
+	move.l	d2,a1
+	add.l	d3,a1
+	move.l	(a1),d2			; take a backup of current value
+	lea	.notabove68k,a0
+	move.l	a0,(a1)
 
 
+	moveq	#$1,d1			; Set 68010
+
+
+	moveq	#$10,d2
+	move.l	d2,a1
+	add.l	d3,a1
+	move.l	(a1),d2
+	lea	.cpu3,a0
+	move.l	a0,(a1)
+	move.l	d3,a2
+	moveq	#$2c,d3
+	add.l	d3,a2
+	move.l	(a2),d3			; Line 111 will happen when illegal instruction happens.
+
+	lea	.above010,a0
+	move.l	a0,(a2)
+	move.l	a7,a3
+
+
+	movec	CACR,d1			;dc.l	$4e7a1002		;movec CACR,d1	; 020-060?
+	moveq	#$2,d1			; Set 68020
+
+	movec	ITT0,d1			; Supported in 040-060
+	moveq	#$4,d1			; Set 68040
+	movec	pcr,d1			;dc.l	$4e7a1808		; movec pcr,dq	; Supported by 060
+	move.l	d1,PCRReg-V(a6)		; Store the value for future use
+	move.l	d1,d7
+	moveq	#$5,d1			; Set 68060
+
+					; OK We have 060, this cpu have some nice features, like the PCR register that shows its config.
+					; and we just read it.. so lets.. use it
+
+	movec	PCR,d4
+	bclr	#1,d4
+	movec	d4,PCR			; Make sure FPU is enabled
+	
+	and.l	#$0000ff00,d7
+	asr.l	#8,d7
+	move.b	d7,CPU060Rev-V(a6)	; Store the 060 Revisionnumber
+
+
+.above010:
+	move.l	d2,(a1)
+	move.l	d3,(a2)
+	move.l	a3,a7
+
+.notabove68k:
+	move.l	#BusError,$8
+	move.l	#IllegalError,$10
+	move.l	#UnimplInst,$2c
+
+	move.b	d1,CPUGen-V(a6)		; Store generation of CPU
+
+	cmp.b	#3,d1
+	blt	.lower020		; check if we have 020 or lower then skip next instruction
+	clr.b	ADR24BIT-V(a6)		; Clear the 24Bit addressmode flag
+					; as some blizzards seem to screw up my 24 bit adr. detection
+
+.lower020:
+
+
+	move.l	#0,d1
+	move.l	#.chkfpu,$10
+	
+	move.l	#$2c,d2
+	move.l	d2,a1
+	move.l	(a1),d2
+	lea	.nofpu,a0
+	move.l	a0,(a1)
+	move.l	a7,a2
+
+
+	cmp.b	#0,CPUGen-V(a6)		; Check if we had 68000
+	beq	.nofpu			; YUP!.  we had
+
+	move.l	d2,(a1)
+	dc.l	$4e7a3801		; movec VBR,d3	(crash on 68k)
+	add.l	d3,a1
+	move.l	(a1),d2
+	move.l	a0,(a1)
+
+	
+
+	dc.l	$f201583a		; ftst.b,d1
+	dc.w	$f327			; FSAVE
+.chkfpu:
+
+
+
+	move.l	a2,d3
+	sub.l	a7,d3
+
+
+	moveq	#1,d1			; Set 68881
+	cmp.b	#$1c,d3
+	beq	.nofpu
+	moveq	#2,d1			; Set 68882
+	cmp.b	#$3c,d3
+	beq	.nofpu
+	moveq	#3,d1			; Set 68040
+	cmp.b	#4,d3
+	beq	.nofpu
+	moveq	#4,d1			; Set 68060
+
+
+	
+	move.l	d2,(a1)
+	
+
+
+.nofpu:
+	move.l	d1,FPU-V(a6)
+
+
+
+	lea	FPUString,a0
+	move.b	d1,FPU-V(a6)
+	mulu	#6,d1
+	add.l	d1,a0
+	move.l	a0,FPUPointer-V(a6)
+
+
+	move.l	#BusError,$8		; This time to a routine that can present more data.
+	move.l	#IllegalError,$10
+	move.l	#UnimplInst,$2c
+
+
+
+.mmutest:
+
+	move.b	#4,MMU-V(a6)		; Lets set a fake value of "MMU Detected"
+	bra	.nommu			; Lets skipthat MMU detection,  it is buggy
+	
+	cmp.b	#0,CPUGen-V(a6)		; Check if 68000
+	beq	.nommu			; skip mmutest
+	bra	.no040mmu				; OK  CPU is detected, lets detect the MMU		
+	move.l	#.test030mmu,$80
+	trap	#0
+	bra	.tested030		; We NEED to be in supervisormode for this
+.test030mmu:
+	move.l	SP,d1
+	move.l	#.no030mmu,$2c
+	move.l	#.no030mmu,$10
+	pmove.l	tc,d0
+	move.b	#1,MMU-V(a6)		; We did not have a crash, set that we got an MMU!
+	rte
+.no030mmu:
+	move.l	d1,SP
+	rte
+
+.tested030:
+
+.test040mmu:
+	move.l	#.no040mmu,$10
+	move.l	#.no040mmu,$2c
+
+;	move.b	(a7),d0
+;	movec	d0,dfc
+;	move.l	(a7),a0
+;	ptestw	(a0)
+	movec	mmusr,d0
+	cmp.l	#0,d0
+	beq	.no040mmu
+	move.b	#2,MMU-V(a6)		; We did not have a crash, set that we got an MMU!
+.no040mmu:
+	
+	move.l	#.nommu,$10
+	move.l	#.nommu,$2c
+	move.l	#.mmu060,$8		; we WILL get an BUSERROR if we do have an mmu of the next instruction so...
+
+;	pflush d0,a0
+	dc.w	$f5c8			; PLPAR A0	; gives illegal instruction if no MMU, and buserror IF MMU
+	bra	.nommu
+.mmu060:
+	move.b	#3,MMU-V(a6)		; We did not have a crash, set that we got an MMU!
+
+.nommu:
+
+	move.l	#BusError,$8		; This time to a routine that can present more data.
+	move.l	#IllegalError,$10
+	move.l	#UnimplInst,$2c
+	move.l	#Trap,$80		; Restored all exceptions etc touched here
+
+
+	clr.l	d1
+	move.b	CPUGen-V(a6),d1		; Get CPU Gen from memory, lets find out the real string
+
+	cmp.b	#1,d1			; Check if we had 010
+	ble	.cpudone		; if equal or lover than. skip the rest
+
+
+
+
+	cmp.b	#2,d1			; Check if we have a 020
+	bne	.no020
+	cmp.b	#0,ADR24BIT-V(a6)	; check if we have 24bit adr mode
+	beq	.full020
+	move.b	#2,d1			; Set 68EC20
+	bra	.cpudone
+.full020:
+	move.b	#3,d1			; Set 68020
+	bra	.cpudone
+.no020:
+	cmp.b	#3,d1			; Check if we have a 030
+	bne	.no030
+
+	cmp.b	#0,MMU-V(a6)		; Check if we have a MMU
+	bne	.full030
+	move.b	#4,d1			; Set 68EC30
+	bra	.cpudone	
+.full030:
+	move.b	#5,d1			; Set 68030
+	bra	.cpudone
+
+.no030:
+	cmp.b	#4,d1			; Check if we have a 040
+	bne	.no040
+
+	cmp.b	#0,MMU-V(a6)		; Check if we have a MMU
+	bne	.mmu040
+	move.b	#6,d1			; no mmu, so no FPu so set 68EC40
+	bra	.cpudone
+
+.mmu040:
+	cmp.b	#0,FPU-V(a6)		; Check if we have a FPU
+	bne	.full040
+	move.b	#7,d1			; Set 68LC40
+	bra	.cpudone
+.full040:
+	move.b	#8,d1			; Set 68040
+	bra	.cpudone
+.no040:
+	cmp.b	#5,d1			; Check if we have a 060
+	bne	.no060
+	cmp.b	#0,MMU-V(a6)
+	bne	.mmu060yes
+	move.b	#9,d1			; no mmu no fpu so set 68EC60
+	bra	.cpudone
+.mmu060yes:
+	cmp.b	#0,FPU-V(a6)
+	bne	.full060
+	move.b	#10,d1			; Set 68LC60
+	bra	.cpudone
+.full060:
+	move.b	#11,d1			; set 68060
+	bra	.cpudone
+
+.no060:					;DQFUQ?  ok something went nuts we did not have ANY CPU?
+	move.b	#12,d1			;So set 68???
+
+.cpudone:
+
+;	move.l	#0,d1
+	move.b	d1,CPU-V(a6)		; Store CPU model
+	lea	CPUString,a0
+	mulu	#7,d1			; Multiply with 7 to point at correct part of string
+	add.l	d1,a0
+	move.l	a0,CPUPointer-V(a6)
+
+	jmp	(a5)
+
+.cpu3:
+	cmp.b	#2,d1
+	bne.w	.notabove68k
+	dc.w	$f02f,$6200,$fffe	;Pmove I-PSR 
+	moveq	#$3,d1			; Set 68030
+	bra	.notabove68k
+
+.nochip:
+	move.b	#0,FPU-V(a6)
+	move.b	#0,MMU-V(a6)
+	move.b	#0,CPUGen-V(a6)
+	clr.l	d1
+	move.b	#13,d1			; set 68060
+	bra	.cpudone
 
 PortTestMenu:
 	bsr	InitScreen
@@ -8353,9 +9724,6 @@ PortTestJoystick:
 	move.w	P0Fire-V(a6),d0
 	cmp.w	P0FireOLD-V(a6),d0
 	beq	.samefire0
-
-	TOGGLEPWRLED
-
 	move.w	d0,P0FireOLD-V(a6)
 
 
@@ -8407,7 +9775,6 @@ PortTestJoystick:
 
 	cmp.b	#1,RMB-V(a6)
 	bne	.loop
-	move.w	#$44,$dff180
 	cmp.b	#1,LMB-V(a6)
 	bne	.loop
 
@@ -8534,6 +9901,54 @@ GetJoy:
 ;------------------------------------------------------------------------------------------
 
 
+Loopbacktest:					; Test if we have a loopbackadapter connected.
+						; Simply by outputing the char in D2 and check if the same char comes back.
+						; if so, 1 is added to D6
+	move.w	#$4000,$dff09a
+	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
+	move.b	#$4f,$bfd000			; Set DTR high
+	move.w	#$0801,$dff09a
+	move.w	#$0801,$dff09c
+
+	move.l	#10000,d7			; Load d7 with a timeoutvariable
+.timeoutloop:	
+	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
+	sub.l	#1,d7				; count down timeout value
+	cmp.l	#0,d7				; if 0, timeout.
+	beq	.endloop
+	move.w	$dff018,d0
+	btst	#13,d0				; Check TBE bit
+	beq.s	.timeoutloop			; Loop until all is ok to send or until timeout hits
+.endloop:
+
+	move.w	#$0100,d1
+	move.b	d2,d1
+	move.w	d1,$dff030			; send it to serial
+	move.w	#$0001,$dff09c			; turn off the TBE bit
+
+
+	move.l	#10000,d7
+
+.timeoutloop2
+	move.b	$bfe001,d0			; Nonsenseread
+	cmp.l	#0,d7
+	beq	.exitloop
+	sub.l	#1,d7
+	move.w	$dff018,d0
+	btst	#14,d0				; Buffer full, we have a new char
+	beq	.timeoutloop2
+	bra	.check
+.exitloop:
+	clr.l	d0
+.check:
+	cmp.b	d0,d2				; Check if in and out was the same char
+	bne.s	.exit				; no so lets exit
+	add.b	#1,d6				; Yes, set d6 to 1
+.exit:
+	jmp	(a0)
+
+
+
 
 
 KeyBoardTest:
@@ -8646,6 +10061,284 @@ KeyBoardTest:
 .exit:
 
 	bra	MainMenu
+
+
+
+DetFastMem:
+	clr.l	FastMem-V(a6)		; Clear amount of fastmem
+
+	lea	A24BitTxt,a0
+	move.l	#7,d1
+	bsr	Print
+
+
+	clr.l	d1
+	lea	$0,a0
+	lea	$0,a0
+	lea	$0,a3
+
+					; as d0 is used as a "random" number in memcheck.  but d0 is also detected chipmem.
+					; lets eor this to make it more... "random"
+					; this detection is quite.. "poor" as it will stop when finding one block of ram. so fragmented memory only first block
+					; will be found
+
+
+	clr.l	d2			; We set d2 to 0.  if it is anything else than 0 after 24bit tests, we have32bit cpu
+
+
+
+	cmp.l	#" PPC",$f00090		; Check if the string "PPC" is located in rom at this address. if so we have a BPPC
+					; that will disable the 68k cpu onboard if memory  below $40000000 is tested.
+	beq	.bppc
+
+
+	move.l	#"NONE",$700
+	move.l	#"24BT",$40000700	; Write "24BT" to highmem
+	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.nop5
+	move.l	#1,d2			; blizzards etc will set this to 1..  apollo etc will not
+
+.nop5
+
+
+
+	move.l	#"NONE",$700
+	move.l	#"24BT",$2000700	; Write "24BT" to highmem
+	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.no24
+	move.l	#1,d2			; other cards will trigger here
+	
+.no24
+	move.l	#"NONE",$700
+	move.l	#"24BT",$4000700	; Write "24BT" to highmem
+	cmp.l	#"24BT",$700		; IF memory is readable at $700 instead. we are using a cpu with 24 bit adress. no memory to detect in next routines
+	beq	.no24a
+	move.l	#1,d2			; blizzards etc will set this to 1..  apollo etc will not
+
+.no24a:
+
+	cmp.l	#0,d2			; if d2 is 0, we have 24 bit addressing
+	beq	.no32bit
+
+	PUSH
+	lea	NO,a0
+	move.l	#2,d1
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
+	POP
+
+	PUSH
+	lea	A3k4kMemTxt,a0
+	move.l	#7,d1
+	bsr	Print
+	POP
+
+
+	
+	eor.l	#$01110000,d0
+	lea	$1000000,a1		; Detect motherboardmem on A3000/4000
+	lea	$7ffffff,a2
+
+	lea	.a3k4kdone,a3
+	bra	DetectMemory
+.a3k4kdone:				; Again, the wonders without stack.  pasta-code.. :)
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+	add.l	d1,FastMem-V(a6)
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det16
+
+	bsr	.PrintDetected
+
+
+.det16:
+	PUSH
+	lea	CpuMemTxt,a0
+	move.l	#7,d1
+	bsr	Print
+	POP
+
+
+	eor.l	#$01110000,d0
+
+	lea	$8000000,a1		; Detect cpuboard on A3000/4000
+	lea	$10000000,a2
+
+
+	lea	.a3k4kcpudone,a3
+	bra	DetectMemory
+.a3k4kcpudone:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det26
+
+	add.l	d1,FastMem-V(a6)
+	bsr	.PrintDetected
+
+.det26:
+
+	PUSH
+	lea	A1200CpuMemTxt,a0
+	move.l	#7,d1
+	bsr	Print
+	POP
+
+
+	eor.l	#$01010000,d0
+	bra	.nobppc
+
+
+.bppc:
+
+	PUSH
+	lea	BPPCtxt,a0
+	move.l	#6,d1
+	bsr	Print
+	POP
+
+
+.nobppc:
+	lea	$40000000,a1
+	lea	$f0000000,a2
+	lea	.det1200cpu,a3
+
+	eor.l	#$11010000,d0
+
+
+	bra	DetectMemory
+.det1200cpu:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det36
+
+	add.l	d1,FastMem-V(a6)
+	bsr	.PrintDetected
+
+.det36:
+
+	bra	.yes32bit
+	
+.no32bit:
+
+	PUSH
+	lea	YES,a0
+	move.l	#2,d1
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
+	POP
+
+
+.yes32bit:
+	PUSH
+	lea	a24BitAreaTxt,a0
+	move.l	#7,d1
+	bsr	Print
+	POP
+
+
+
+	lea	$200000,a1		; Detect memory on 24 bit range
+	lea	$9fffff,a2
+	lea	.24bitdone,a3
+	eor.l	#$10010000,d0
+
+	bra	DetectMemory
+.24bitdone:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det46
+
+	add.l	d1,FastMem-V(a6)
+	bsr	.PrintDetected
+
+
+.det46:
+	PUSH
+	lea	FakeFastTxt,a0
+	move.l	#7,d1
+	bsr	Print
+	POP
+
+	eor.l	#$10010000,d0
+
+
+	lea	$c00000,a1		; Detect memory on 24 bit range
+	lea	$c80000,a2
+
+
+	eor.l	#$10110000,d0
+
+	lea	.fakefastdone,a3
+	bra	DetectMemory
+.fakefastdone:
+	move.l	a0,d5			; Backup startaddress of memory found
+	move.l	a1,d4			; Backup endaddress of memory found
+	move.l	d1,d3			; Backup data of addresses found to registers not used
+
+
+	cmp.l	#0,a0			; was a0 0?  if so. no memory was found
+	beq	.det56
+
+	add.l	d1,FastMem-V(a6)
+	bsr	.PrintDetected
+
+
+
+
+.det56:
+
+	rts
+
+
+
+.PrintDetected:
+
+	PUSH
+	lea	FastFoundtxt,a0
+	move.l	#6,d1
+	bsr	Print
+	POP
+
+
+	PUSH	
+	move.l	d5,d0
+	bsr	binhex
+	add.l	#1,a0
+	move.l	#6,d1
+	bsr	Print
+	POP
+
+	PUSH
+	lea	MinusDTxt,a0
+	move.l	#6,d1
+	bsr	Print
+	
+
+	move.l	d4,d0
+	bsr	binhex
+	add.l	#1,a0
+	move.l	#6,d1
+	bsr	Print
+
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	POP
+	rts
 
 
 
@@ -8842,17 +10535,80 @@ ErrorScreen:
 
 ;------------------------------------------------------------------------------------------
 
+
+SwapMode:
+	move.w	#$fff,$dff180
+	bchg	#5,SCRNMODE-V(a6)
+	clr.l	d0
+	move.b	SCRNMODE-V(a6),d0
+	move.w	d0,$dff1dc		; Set BEAMCON90
+	bra	MainMenu
+
 Setup:
 	bsr	ClearScreen
 	lea	SetupTxt,a0
 	move.l	#1,d1
 	bsr	Print
-	bsr	DebugScreen
-	bsr	WaitButton
+;	bsr	WaitButton
+	bsr	WaitPressed
+	bsr	WaitReleased
 	bra	MainMenu
 
 
 ;------------------------------------------------------------------------------------------
+
+WaitShort:					; Wait a short time, aprox 10 rasterlines. (or exact IF we have detected working raster)
+	PUSH
+	cmp.b	#1,RASTER-V(a6)			; Check if we have a confirmed working raster
+	beq	.raster
+	move.l	#$1000,d0			; if now.  lets try to wait some anyway.
+	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
+.loop:
+	move.b	$bfe001,d1			; Dummyread from slow memory
+	move.b	$dff006,d1
+	dbf	d0,.loop
+	POP
+	rts
+.raster:
+	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
+	move.b	$dff006,d0			; Get what rasterline we are at now
+	add.b	#10,d0				; Add 10
+.rasterloop:
+	cmp.b	$dff006,d0
+	bne.s	 .rasterloop
+	POP
+	rts
+
+
+WaitLong:					; Wait a short time, aprox 10 rasterlines. (or exact IF we have detected working raster)
+	PUSH
+	cmp.b	#1,RASTER-V(a6)			; Check if we have a confirmed working raster
+	beq	.raster
+	move.w	#3,d1
+	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
+.loop2
+	move.l	#$ffff,d0			; if now.  lets try to wait some anyway.
+.loop:
+	move.b	$bfe001,d2			; Dummyread from slow memory
+	move.b	$dff006,d2
+	dbf	d0,.loop
+	dbf	d1,.loop2
+	POP
+	rts
+
+.raster:
+	cmp.b	#$90,$dff006
+	bne.s	.raster				; Wait for rasterline $90
+
+	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
+
+.rasterloop:
+	cmp.b	#$8f,$dff006
+	bne.s	 .rasterloop			; Wait for rasterline $8f, meaning we have waited for one frame
+	POP
+	rts
+
+
 
 OtherTest:
 	bsr	InitScreen
@@ -9190,6 +10946,10 @@ oki:
 	bsr	PrintChar
 	rts
 
+
+
+
+
 ;------------------------------------------------------------------------------------------
 
 AutoConfig:					; Do Autoconfigmagic
@@ -9284,6 +11044,8 @@ DoAutoconfig:
 	bsr	.ReadRom
 	cmp.b	#0,AutoConfType-V(a6)	; Check type of card, if 0, no card found
 	beq	.noz2	
+
+	lea	E_EXPANSIONBASE,a0
 	bsr	.WriteByte
 	add.l	#1,d6
 	cmp.l	#32,d6			; if we hit 32 boards.. something is wrong, exit
@@ -9525,9 +11287,11 @@ DoAutoconfig:
 
 .readsetz2:
 	move.b	#0,AutoConfZorro-V(a6)
+	bra	.noz3force
 .readsetz3:
 
-
+	move.b	#1,AutoConfZorro-V(a6)
+.noz3force:
 
 	clr.l	d7			; Clear d7 to have as a variable. if changed we have extended size
 	btst	#5,er_Flags(a2)		; Check if Extended sizes will be used
@@ -9555,6 +11319,10 @@ DoAutoconfig:
 	rts
 
 .ReadByte:			; Reads one byte from Cardexpansion.
+
+	bsr	WaitLong	; Put in some wait here, so slow boards can wake up aswell
+
+
 				; IN:
 				; 	D0 = Location into buffer to read
 				;	A0 = Card
@@ -9614,7 +11382,7 @@ DoAutoconfig:
 .writenoz2illegal:
 	swap	d0
 	move.b	d0,AutoConfZ2Ram-V(a6)
-	lea	E_EXPANSIONBASE,a1
+	move.l	a3,a1			; Copy backup of expansionbase to a1.
 	bra	.Write
 
 .WriteZ2noram:
@@ -9639,23 +11407,23 @@ DoAutoconfig:
 
 	swap	d0
 	move.b	d0,AutoConfZ2Ram-V(a6)
-	lea	E_EXPANSIONBASE,a1
+	move.l	a3,a1
 	bra	.Write
 
 
 .WriteZ3:
 	lea	AutoConfZ3CardTxt,a0	; We got a Z3 Card
 	clr.l	d1
-	move.w	AutoConfZ3-V(a6),d1
-	move.w	d1,AutoConfWByte-V(a6)
+	move.w	AutoConfZ3-V(a6),d1	; Get address to assign to
+	move.w	d1,AutoConfWByte-V(a6)	; Write that info to the byte to be written
 	move.l	d1,d0
 	swap	d0
-	move.l	d0,AutoConfAddr-V(a6)
+	move.l	d0,AutoConfAddr-V(a6)	; Write it to the register to keep info about adr
 	add.l	AutoConfSize-V(a6),d0
 	swap	d0
-	move.w	d0,AutoConfZ3-V(a6)
-	lea	EZ3_EXPANSIONBASE,a1
-	bra	.Write
+	move.w	d0,AutoConfZ3-V(a6)	; Set the size?
+	move.l	a3,a1
+	bra	.Write			; write the data
 
 .WriteZ2IO:
 	lea	AutoConfRomCardTxt,a0	; We got a Z2 ROM Card
@@ -9671,15 +11439,15 @@ DoAutoconfig:
 	add.l	AutoConfSize-V(a6),d0
 	swap	d0
 	move.b	d0,AutoConfZ2IO-V(a6)
-	lea	E_EXPANSIONBASE,a1
+	move.l	a3,a1
 	bra	.Write
 
 .Write:					; OK! we have a card, not Z3 or Z2io. it must be Z2 RAM!
 	cmp.b	#0,AutoConfIllegal-V(a6)	; Check if the illegalfag was set
 	bne	.WriteNoAssign			; it was not 0, so it is set, shutdown card
-	move.l	d1,d3
+	move.l	d1,d3				; Store the address into d3 as backup
 	move.l	#2,d1
-	bsr	Print
+	bsr	Print				; print the string stored in a0
 
 					; IN now:
 					; A0 = String to output
@@ -9692,29 +11460,29 @@ DoAutoconfig:
 	move.l	d0,d2			; Store size in D2
 	bsr	binhex
 	move.l	#6,d1
-	bsr	Print
+	bsr	Print			; Prints the address to write
 	lea	MinusTxt,a0
 	move.l	#3,d1
-	bsr	Print
+	bsr	Print			; Prints " - "
 
 	move.l	d2,d0			; move back size to D0
 	add.l	AutoConfSize-V(a6),d0	; Add the size, to get the endaddress
 	bsr	binhex
 	move.l	#6,d1
-	bsr	Print
+	bsr	Print			; Prints the and address
 
 	lea	NewLineTxt,a0
-	bsr	Print
+	bsr	Print			; Makes a new line
 
 	cmp.b	#0,AutoConfMode-V(a6)
-	beq	.WriteFast
+	beq	.WriteFast		; ok we are in "fast" mode.. so no verbose...
 	lea	AutoConfEnableTxt,a0
 	move.l	#2,d1
 	bsr	Print
 
 	clr.b	AutoConfExit-V(a6)	; Clear the force exitflag
 .WriteLoop:
-	bsr	GetInput	; Get inputdata
+	bsr	GetInput		; Get inputdata
 	cmp.b	#0,BUTTON-V(a6)
 	beq	.WriteLoop
 	cmp.b	#1,LMB-V(a6)
@@ -9722,14 +11490,14 @@ DoAutoconfig:
 	cmp.b	#1,RMB-V(a6)	
 	beq	.WriteNoAssign
 	move.b	GetCharData-V(a6),d7	; Get chardata
-	bclr	#5,d7		; Make it uppercase
+	bclr	#5,d7			; Make it uppercase
 	cmp.b	#"Y",d7
 	beq	.WriteFast
 	cmp.b	#"N",d7
 	beq	.WriteNoAssign
 	cmp.b	#$1b,d7
 	beq	.forceexit
-	bra	.WriteLoop
+	bra	.WriteLoop		; Simply we have now printed all data, and asked user what to do. and loop until answered.
 
 .WriteFast:
 	move.l	a1,a0			; Set correct Expansionbase
@@ -9739,32 +11507,36 @@ DoAutoconfig:
 .WriteNoAssign:
 	move.l	a1,a0			; Set correct Expansionbase
 	moveq	#ec_Shutup+ExpansionRom_SIZEOF,d0
-	bsr	.WriteCard
+	bsr	.WriteCard		; Send shutup
 	move.l	#-2,d0
 .exit:	rts
 .forceexit:
 	move.b	#1,AutoConfExit-V(a6)	; Set force exit flag
 	rts	
+
+
 .WriteCard:
 	move.l	#ec_BaseAddress+ExpansionRom_SIZEOF,d0
+
 	clr.l	d1
 	move.w	AutoConfWByte-V(a6),d1	; Get data to write
 
-	cmp.b	#0,AutoConfMode-V(a6)
-	beq	.WriteCardFast
+;	cmp.b	#0,AutoConfMode-V(a6)	; Check if we want a more verbose config-
+;	beq	.WriteCardFast		; Why the F..  did I do this?? kinda pointless..  humm
+	
 .WriteCardFast:
 	lsl.l	#2,d0			; Multiply with 4
+
 	move.l	a0,a1
 	lea.l	0(a0,d0.w),a0
 
+	cmp.b	#1,AutoConfZorro-V(a6)	; Check if the board is Z3
+	beq	.writez3
 
-	cmp.l	#EZ3_EXPANSIONBASE,a0
-	bhs.s	.writez3
-
-	move.l	d1,d0
-	lsl.b	#4,d0
+	move.l	d1,d0			; take the byte to write
+	lsl.b	#4,d0			; Split it up to nibbles
 	move.b	d0,$2(a0)
-	move.b	d1,(a0)
+	move.b	d1,(a0)			; Write the byte to the card (as 2 nibbles)
 	rts
 
 .writez3:
@@ -9774,13 +11546,333 @@ DoAutoconfig:
 	move.b	d0,$100(a0)
 	move.b	d1,(a0)
 	move.l	a1,a0
+	move.l	#$48,d0
+	lea	0(a0,d0.w),a0
+	move.b	d2,(a0)
+
+
+	move.l	a1,a0
 	move.l	#$44,d0
 	lea	0(a0,d0.w),a0
 	move.w	d2,(a0)
 
-
 .dowrite:
 	rts
+
+
+Detectmem:
+	bsr	ClearScreen
+	move.w	#"RN",DetectMemRnd-V(a6)	; "put in RN" at detectMemRnd to have some data
+	add.w	#1,DetectMemRnd+2-V(a6)		; Increase by 1 to have a number that changes every call
+	lea	Det24bittxt,a0
+	move.l	#5,d1
+	bsr	Print
+
+	clr.l	FastmemBlock-V(a6)
+
+	lea	$200000,a1
+	lea	$d00000,a4	; endaddress of this pass
+	bsr	.memloop	
+
+	lea	Det32bittxt,a0
+	move.l	#5,d1
+	bsr	Print
+
+	cmp.b	#1,ADR24BIT-V(a6)	; Check if we had 24 bit cpu...
+	bne	.no24bit
+
+	lea	No32bittxt,a0
+	move.l	#1,d1
+	bsr	Print
+	bra	.24bit
+.no24bit:
+
+	cmp.l	#" PPC",$f00090	; Check if the string "PPC" is located in rom at this address. if so we have a BPPC
+				; that will disable the 68k cpu onboard if memory  below $40000000 is tested.
+	bne	.nobppc
+	lea	$40000000,a1	; Strangly enough.  bppc detected memory will be totally just plain WRONG! I guess it does stuff in rom
+	bra	.bppc		; that makes a more decent memorymap. Now it just finds lots of smaller shadows..
+	
+.nobppc:
+	lea	$1000000,a1
+.bppc:
+	lea	$f0000000,a4	; endaddress of this pass
+	bsr	.memloop	
+.24bit:
+
+	lea	Totmemtxt,a0
+	move.l	#6,d1
+	bsr	Print
+
+	move.l	FastmemBlock-V(a6),d0
+	move.l	d0,d1
+	asl.l	#6,d1
+	move.l	d1,TotalFast-V(a6)
+	bsr	.PrintSize
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+
+	lea	AnyKeyMouseTxt,a0
+	move.l	#5,d1
+	bsr	Print
+
+	bsr	WaitPressed
+	bsr	WaitReleased
+	bra	MainMenu
+
+.memloop:
+	clr.l	d1
+	move.l	a4,a2		; Set a2 to endaddress of scan
+	lea	.leadone,a3
+	move.l	DetectMemRnd-V(a6),d0	; store a "random" data in d0 for shadowcontrol
+
+	bra	DetectMemory
+
+.leadone:
+	add.l	d1,FastmemBlock-V(a6)
+
+	cmp.l	#0,a0
+	bne	.mem
+	
+	lea	EndMemTxt,a0
+	move.l	#3,d1
+	bsr	Print
+	bra	.end
+.mem:
+	cmp.l	#0,d1		; check if size was 0, that means this memory is "illegal" and should be skipped
+	beq	.blockdone
+	
+	move.l	a0,a2		; Store address of first mem found into a2
+	move.l	d1,d2		; copy size to d2
+	
+	lea	DetMem,a0
+	move.l	#2,d1
+	bsr	Print
+
+	move.l	d2,d0		; copy size to d0
+
+
+	bsr	.PrintSize
+	
+	lea	DetOfmem,a0
+	bsr	Print
+
+	move.l	a2,d0		; Print first memaddress
+	bsr	binhex
+	bsr	Print
+
+	lea	MinusTxt,a0
+	bsr	Print
+
+	move.l	a1,d0		; Print end memaddress
+	bsr	binhex
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+				; ok we now had the endaddress at the same register Detectmemory uses as START. so lets check if we are at end of
+.blockdone
+				; memarea and if not, just loop until we are done.
+	add.l	#64*1024,a1	; Add 64k for next block to test, just in case
+
+	cmp.l	a4,a1
+	blo	.memloop
+.end:
+	rts
+
+.PrintSize:
+	cmp.l	#32,d0		; Check if we had more than 4 blocks (2048k)  if so.. lets show in MB instead.
+	bge	.showMB
+	asl.l	#6,d0		; convert number of 16k blocks to real value of kb
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print		; print it
+	lea	KB,a0
+	bsr	Print
+	bra	.donesize
+
+.showMB:			; convert number of 16k blocks to real value of mb
+	asr.l	#4,d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print		; print it
+	lea	MB,a0
+	bsr	Print
+.donesize:
+	rts
+
+
+
+DetectMemory:
+					; D1 Total block of known working ram in 16K blocks (clear before first use)
+					; A0 first usable addr
+					; a1 First addr to scan
+					; a2 Addr to end
+					; a3 Addr to jump after done (as this does not use any stack
+					; only OK registers to use as write: (d1), d2,d3,d4,d5,d6,d7, a0,a1,a2,a5
+
+
+					; D0 is a special "in" never to be modified but taken as a "random" generator for shadowcontrol
+
+					; OUT:	d1 = blocks of found mem
+					;	a0 = first usable address
+					;	a1 = last usable address
+
+	move.l	a1,d7
+	and.l	#$fffffffc,d7		; just strip so we always work in longword area (just to be sure)
+	move.l	d7,a1
+
+	move.l	a3,d7			; Store jumpaddress in D7
+	lea	$0,a0			; clear a0
+.Detect:
+	lea	MEMCheckPattern,a3
+	move.l	(a1),d3			; Take a backup of content in memory to D3
+
+.loop:
+	cmp.l	a1,a2			; check if we tested all memory
+	blo	.wearedone		; we have, we are done!
+
+	move.l	(a3)+,d2		; Store value to test for in D2	
+
+	move.l	d2,(a1)			; Store testvalue to a1
+	nop
+	nop
+	nop
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+	move.l	(a1),d4			; read value from a1 to d4
+					; Reading several times.  as sometimes reading once will give the correct answer on bad areas.
+					
+
+	btst	#6,$bfe001		; Check if LMB is pressed
+	beq	.wearedone
+
+
+	cmp.l	d4,d2			; Compare values
+	bne	.failed			; ok failed, no working ram here.
+	cmp.l	#0,d2			; was value 0? ok end of list
+	bne	.loop			; if not, lets do this test again
+					; we had 0, we have working RAM
+
+	move.l	a1,a5			; OK lets see if this is actual CORRECT ram and now just a shadow.
+
+	move.l	a5,(a1)			; So we store the address we found in that location.
+	move.l	#32,d6			; ok we do test 31 bits
+	move.l	a5,d5
+
+.loopa:
+	sub.l	#1,d6
+	cmp.l	#0,d6
+	beq	.done			; we went all to bit 0.. we are done I guess
+	btst	d6,d5			; scan until it isnt a 0
+	beq.s	.loopa
+.bitloop:
+
+	bclr	d6,d5			; ok. we are at that address, lets clear first bit of that address
+	move.l	d5,a3
+
+
+	cmp.l	(a3),a5			; ok check if that address contains the address we detected, if so. we have a "shadow"
+	beq	.shadow
+
+	cmp.l	#0,a3			; it was 0, so we "assume" we got memory
+	beq	.mem
+
+					; ok we didnt have a shadow here
+					; a5 will contain address if there was detected ram
+	sub.l	#1,d6
+
+	cmp.l	#4,d6
+	beq	.mem			; ok we was at 4 bits away..  we can be PRETTY sure we do not have a shadow here.  we found mem
+
+	bra	.bitloop
+
+.mem:
+	move.l	d3,(a1)			; restore backup of data
+
+	cmp.l	(a1),d0			; check if value at a1 is the same as d0. this means we have a shadow on top and we have already tested
+	beq	.shadowdone			; this memory.  basically: we are done
+
+
+	cmp.l	#0,a0			; check if a0 was 0, if so, this is the first working address
+	bne	.wehadmem
+	move.l	a5,a0			; so a5 contained the address we found, copy it to a0
+	move.l	d7,16(a1)		; ok store d7 into what a1 points to.. to say that this is a block of mem)
+
+.wehadmem:
+
+	add.l	#4,d1			; OK we found mem, lets add 4 do d1(as old routine was 64K blocks  now 256.  being lazy)
+	bra	.next
+
+.wearedone:
+	bra	.done
+
+.shadow:
+	TOGGLEPWRLED			; Flash with powerled doing this.. 
+.failed:
+	move.l	d3,(a1)			; restore backup of data
+	cmp.l	#0,a0			; ok was a0 0? if so, we havent found memory that works yet, lets loop until all area is tested
+	bne	.done
+
+.next:
+	btst	#6,$bfe001		; Check if LMB is pressed
+	beq	.wearedone
+
+
+	move.l	d0,(a1)			; put a note at the first found address. to mark this as already tagged
+	move.l	a0,4(a1)		; put a note of first block found
+	move.l	a1,8(a1)		; where this block was
+	move.l	d1,12(a1)		; total amount of 64k blocks found
+					; Strangly enough. this seems to also write onscreen at diagrom?
+
+;	add.l	#64*1024,a1		; Add 64k for next block to test
+	add.l	#256*1024,a1		; Add 64k for next block to test
+	bra	.Detect
+.shadowdone:
+	TOGGLEPWRLED			; Flash with powerled doing this.. 
+.done:
+
+	move.l	d7,a3			; Restore jumpaddress
+	jmp	(a3)
+
+
+
+GetHWReg:					; Dumps all readable HW registers to memory
+	move.w	$dff000,BLTDDAT-V(a6)
+	move.w	$dff002,DMACONR-V(a6)
+	move.w	$dff004,VPOSR-V(a6)
+	move.w	$dff006,VHPOSR-V(a6)
+	move.w	$dff008,DSKDATR-V(a6)
+	move.w	$dff00a,JOY0DAT-V(a6)
+	move.w	$dff00c,JOY1DAT-V(a6)
+	move.w	$dff00e,CLXDAT-V(a6)
+	move.w	$dff010,ADKCONR-V(a6)
+	move.w	$dff012,POT0DAT-V(a6)
+	move.w	$dff014,POT1DAT-V(a6)
+	move.w	$dff016,POTINP-V(a6)
+	move.w	$dff018,SERDATR-V(a6)
+	move.w	$dff01a,DSKBYTR-V(a6)
+	move.w	$dff01c,INTENAR-V(a6)
+	move.w	$dff01e,INTREQR-V(a6)
+	move.w	$dff07c,DENISEID-V(a6)
+	move.w	$dff1da,HHPOSR-V(a6)
+	rts
+
+
+
 
 
 ;------------------------------------------------------------------------------------------
@@ -10477,7 +12569,7 @@ DiskdriveTest:
 
 
 	POP
-
+ 
 ;	cmp.b	d3,d0				; Are we on correct sector?
 ;	beq	.sectorOK			; Yes
 	move.b	d0,sector-V(a6)
@@ -10533,6 +12625,598 @@ DiskdriveTest:
 	POP
 	rts
 
+GAYLE_ADDR: 	equ	$da8000
+GAYLE_ID_ADDR:	equ	$de1000
+
+
+; Gaylecodehelp from Stephen Leary
+
+GayleExp:
+	bsr	ClearScreen
+
+
+	lea	$dd201c,a5
+	bsr	WaitRDY
+
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+	cmp.b	#0,d2
+	beq	.exit			; we had a timeout.  go to nointexit
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+	move.b	#$ec,d0				; Read the drive ID
+	move.b	d0,$dd201c
+
+
+
+
+	move.l	$dd2020,a2			; IDE_Slow
+	move.b	$1c(a2),d1			; AT_Status. clears interrupt (IDE)
+
+	PUSH
+	lea	IDEInterruptCleared,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	bsr	IDECheckStatus
+
+	move.w	SR,d2				; Save current SR
+	ori.w	#$700,sr			; Raise int priority to level 7
+	move.b	$1000(a0),d1			; Gayle_intchange
+
+	PUSH
+	lea	IDEInterruptChangedReading,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	move.w	d1,d0
+	PUSH
+	bsr	binhex
+	move.l	#3,d1
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print	
+	POP
+
+
+
+
+	lea	$dd2020,a2			; IDE_Slow
+	bsr	IDEReadData
+
+	move.l	DiskBuffer-V(a6),d0
+	move.l	d0,a4				; A4 now contains pointer to diskbuffer
+
+
+	lea	IDESurfacesTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	clr.l	d0
+	move.w	$6a(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+	
+	lea	IDESectorsTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$6c(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+
+
+	lea	IDECylindersTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$68(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+
+	lea	IDEBlkSize,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$6(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+	lea	IDEUnitTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+
+	move.l	a4,a5
+	add.l	#$32,a5				; step to unitname  (2d)
+
+	move.l	#31,d7
+.unitloop:
+	clr.l	d0
+	move.b	(a5)+,d0
+	bsr	MakePrintable
+	move.l	#2,d1
+	bsr	PrintChar
+	dbf	d7,.unitloop
+
+	lea	REVTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.l	a4,a5
+	add.l	#$2d,a5				; step to unitname  (2d)
+
+	move.l	#4,d7
+.unitrevloop:
+	clr.l	d0
+	move.b	(a5)+,d0
+	bsr	MakePrintable
+	move.l	#2,d1
+	bsr	PrintChar
+	dbf	d7,.unitrevloop
+
+
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+
+	bsr	IDECheckStatus
+
+.exit:
+
+	lea	AnyKeyMouseTxt,a0
+	move.l	#4,d1
+	bsr	Print
+
+	bsr	WaitPressed
+.no_hw:
+	bra	MainMenu
+
+
+
+GayleTest:
+	bsr	ClearScreen
+
+	lea	GayleCheckMirrorTxt,a0
+	move.l	#6,d1
+	bsr	Print
+
+
+	lea	GAYLE_ID_ADDR,a1			; Read Gayle address
+	move.w	$dff01c,-(sp)			; Store value if intena in stack
+	move.w	#$bfff,$9a(a1)			; set all enables
+	move.w	#$3fff,d2			; also flag for no mirror
+	cmp.w	$dff01c,d2
+	bne	.nomirror
+	move.w	d2,$9a(a1)			; Clear all enables
+	tst	$dff01c
+	bne.s	.nomirror
+	moveq	#0,d2				; Mirrored
+
+	lea	GayleMirrorTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+.nomirror:
+	move.w	#$3fff,$dff09c			; Clear bits
+	ori.w	#$8000,(sp)			; add setbit
+	move.w	(sp)+,$dff09c			; Reset values
+	tst.w	d2				; Did we find mirroring
+	beq	.no_hw				; yes we did. quit
+
+	lea	GayleNoMirrorTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	lea	GayleVerTxt,a0
+	move.l	#7,d1
+	bsr	Print
+
+
+	moveq	#0,d2
+	move.b	d2,(a1)				; Value doesnt matter, just a write needed
+	
+	bsr	.get_gid_bit			; Get 4 bits
+	bsr	.get_gid_bit
+	bsr	.get_gid_bit
+	bsr	.get_gid_bit
+	bsr	.get_gid_bit			; Get 4 bits
+	bsr	.get_gid_bit
+	bsr	.get_gid_bit
+	bsr	.get_gid_bit
+
+
+	move.w	d2,d0
+	bsr	binhexbyte
+	move.l	#2,d1
+	bsr	Print
+
+	cmp.b	#$d1,d2				; Check for version $d1 (A1200 Gayle)
+	beq.w	.A1200
+
+	cmp.b	#$d0,d2				; Check for version $d0 (A600 Gayle)
+	beq.s	.A600
+
+	and.b	#$d0,d2				; mask out numbers.. so we can find if there are any other Dx versions..
+
+	cmp.b	#$d0,d2				; Check for version $d0 can now be any Dx version.. so lets call it "unknown" if found
+	beq.s	.Other
+	
+
+	lea	NoGayleTxt,a0
+	move.l	#2,d1
+	bsr	Print
+
+	lea	AnyKeyMouseTxt,a0
+	move.l	#4,d1
+	bsr	Print
+
+.done:
+	bsr	WaitPressed
+	bra	MainMenu
+
+.no_hw:
+	lea	GayleNoIDETxt,a0
+	move.w	#1,d1
+	bsr	Print
+	bra	.done
+
+.Other:
+	lea	UnknownTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	bra	.GayleFound
+
+
+.A600:
+	lea	A600Txt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	bra	.GayleFound
+
+.A1200:
+	lea	A1200Txt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+	bra	.GayleFound
+
+.GayleFound:
+	lea	GayleIDETxt,a0
+	move.w	#2,d1
+	bsr	Print
+
+	lea	$da001c,a5
+	bsr	WaitRDY
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+	cmp.b	#0,d2
+	beq	.nointexit			; we had a timeout.  go to nointexit
+
+	move.b	#$ec,d0				; Read the drive ID
+	bsr	.IDECommand
+
+.BoardServer:
+	PUSH
+	lea	IDEInterruptCheck,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	moveq.l	#0,d0				; Assume it is not out interrupt
+	lea	GAYLE_ADDR,a0			; Point to the board
+	move.b	$1000(a0),d1			; IntChange check for int!
+	bpl	.nointexit			; not ours
+
+	PUSH
+	lea	IDEInterruptDetected,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	bsr	IDECheckStatus
+						; Our interrupt, clear it
+						; must clear drive first, then gayle
+	move.l	$da0000,a2			; IDE_Slow
+	move.b	$1c(a2),d1			; AT_Status. clears interrupt (IDE)
+
+	PUSH
+	lea	IDEInterruptCleared,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	bsr	IDECheckStatus
+
+	move.w	SR,d2				; Save current SR
+	ori.w	#$700,sr			; Raise int priority to level 7
+	move.b	$1000(a0),d1			; Gayle_intchange
+
+	PUSH
+	lea	IDEInterruptChangedReading,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	move.w	d1,d0
+	PUSH
+	bsr	binhex
+	move.l	#3,d1
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print	
+	POP
+
+	move.b	d1,$1000(a0)			; Clear latch in gayle
+	move.w	d2,sr				; Reenable normal int level
+
+	lea	$da2002,a2			; IDE_Slow
+	bsr	IDEReadData
+
+	move.l	DiskBuffer-V(a6),d0
+	move.l	d0,a4				; A4 now contains pointer to diskbuffer
+
+
+	lea	IDESurfacesTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	clr.l	d0
+	move.w	$6a(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+	
+	lea	IDESectorsTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$6c(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+
+
+	lea	IDECylindersTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$68(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+
+	lea	IDEBlkSize,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.w	$6(a4),d0
+	bsr	bindec
+	move.l	#2,d1
+	bsr	Print
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+	lea	IDEUnitTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+
+	move.l	a4,a5
+	add.l	#$32,a5				; step to unitname  (2d)
+
+	move.l	#31,d7
+.unitloop:
+	clr.l	d0
+	move.b	(a5)+,d0
+	bsr	MakePrintable
+	move.l	#2,d1
+	bsr	PrintChar
+	dbf	d7,.unitloop
+
+	lea	REVTxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+	move.l	a4,a5
+	add.l	#$2d,a5				; step to unitname  (2d)
+
+	move.l	#4,d7
+.unitrevloop:
+	clr.l	d0
+	move.b	(a5)+,d0
+	bsr	MakePrintable
+	move.l	#2,d1
+	bsr	PrintChar
+	dbf	d7,.unitrevloop
+
+
+
+	lea	NewLineTxt,a0
+	bsr	Print
+
+
+
+	bsr	IDECheckStatus
+
+
+.nointexit:
+
+.endIDTests:
+	
+
+	bra	.done
+
+.get_gid_bit:					; Read a gary/Gayle bit
+	move.b	(a1),d0
+	lsl.b	#1,d0
+	roxl.b	#1,d2
+	rts
+
+
+.IDECommand:
+	move.b	d0,$da001c
+	rts
+
+IDECheckStatus:
+	PUSH
+	lea	IDEInterruptStatusReading,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+
+	move.b	$da8000,d0
+	PUSH
+	bsr	binhex
+	move.l	#3,d1
+	bsr	Print
+	lea	NewLineTxt,a0
+	bsr	Print
+	POP
+	rts
+
+IDEReadData:
+
+	move.l	#4096,d0
+	bsr	GetChip				; Get block of 4K
+
+	move.l	d0,DiskBuffer-V(a6)
+
+	move.l	d0,a4				; move memoryaddress to a4 so we can use it
+
+
+	; print about ide rea
+
+	PUSH
+	lea	GayleIDERead,a0
+	move.l	#3,d1
+	bsr	Print
+	POP
+	
+	move.l	#0,d3
+.loopide:
+	move.w	0(a2),d0			; AT_Data;
+
+	move.l	d0,d1
+	asr.l	#8,d1
+	asl.l	#8,d0
+	add.b	d1,d0				; now word is byteswapped
+
+
+	move.w	d0,(a4)+
+	add.l	#1,d3
+	cmp.l	#1024,d3
+	ble	.loopide
+
+	lea	Donetxt,a0
+	move.l	#3,d1
+	bsr	Print
+
+.nomem:
+	rts
+
+
+
+WaitRDY:
+	move.w	#50,d0
+	move.w	d0,GayleData-V(a6)
+	move.l	#1,d7				; retrycounter
+.loop:
+	move.w	GayleData-V(a6),d2
+	sub.w	#1,d2
+	move.w	d2,GayleData-V(a6)
+
+	PUSH
+	lea	GayleRDYTxt,a0
+	move.l	#2,d1
+	bsr	Print
+	POP
+
+
+	move.b	(a5),d0			; Statuscommand
+	and.b	#$c1,d0
+	move.b	d0,d4
+		
+	PUSH
+	bsr	binhexbyte
+	move.w	#3,d1
+	bsr	Print
+
+	move.l	#32,d0
+	bsr	PrintChar
+	move.l	#40,d0
+	bsr	PrintChar
+
+	POP
+
+	move.w	(a5),d0
+	PUSH
+	bsr	binhexword
+	move.l	#3,d1
+	bsr	Print
+	move.l	#41,d0
+	bsr	PrintChar
+
+	lea	TryTxt,a0
+	bsr	Print
+	move.l	d7,d0
+	bsr	bindec
+	bsr	Print
+	bsr	SameRow
+	POP	
+
+	add.l	#1,d7
+
+	move.w	GayleData-V(a6),d2
+	cmp.w	#0,d2
+	beq	.nodisk
+
+
+	cmp.b	#$40,d4
+	bne	.loop
+	bra	.exit
+.nodisk:
+	lea	NoDiskTxt,a0
+	move.l	#3,d1
+	bsr	Print
+.exit:
+	rts
+
 	
 PrintYes:
 	lea	YES,a0
@@ -10547,6 +13231,8 @@ PrintNo:
 	rts
 
 ;------------------------------------------------------------------------------------------
+
+
 
 DevPrint:
 	clr.l	d0
@@ -10913,6 +13599,7 @@ DebugSerial:					; This dumps out registers..
 
 
 
+
 ForceSer:					; For debug. print stuff on serialport. if port disabled force 9600BPS
 
 
@@ -10969,208 +13656,6 @@ ForceSer:					; For debug. print stuff on serialport. if port disabled force 960
 	
 
 
-DumpHexByte:				; PRE MEM-CODE!  dumps content of BYTE in d1 to serialport-
-					; INDATA:
-					;	D1 = byte to print
-					;	A2 = address to jump after done
-
-	lea	bytehextxt,a0
-	clr.l	d2
-	move.b	d1,d2
-	asl	#1,d2
-	add.l	d2,a0
-	lea	.char1,a1
-	bra	DumpSerialChar
-.char1:
-	lea	.char2,a1
-	bra	DumpSerialChar
-.char2:
-	jmp	(a2)
-
-
-DumpHexLong:
-					; Same as DumpHexByte but longword.
-					; A3 is jumppointer for exit
-	move.l	d1,d6
-	swap	d1
-	asr.l	#8,d1
-	lea	.byte1,a2
-	bra	DumpHexByte
-.byte1:
-	move.l	d6,d1
-	swap	d1
-	lea	.byte2,a2
-	bra	DumpHexByte
-.byte2:
-	move.l	d6,d1
-	asr	#8,d1
-	lea	.byte3,a2
-	bra	DumpHexByte		
-.byte3:
-	move.l	d6,d1
-	lea	.byte4,a2
-	bra	DumpHexByte
-.byte4:
-	jmp	(a3)
-
-
-DumpClearSerial:				; Just read serialport, to empty it, this is pre-memory, so no return.
-						; a0 contains jumpaddress where to go after exiting
-	move.l	#1,d6				; load d6 with 1, so we run this, twice to be sure serialbuffer is cleared
-.loop:
-	move.w	#$4000,$dff09a
-	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
-	move.b	#$4f,$bfd000			; Set DTR high
-	move.w	#$0801,$dff09a
-	move.w	#$0801,$dff09c
-
-	move.l	#10000,d7
-.timeoutloop2
-	move.b	$bfe001,d0			;nonsenseread
-	cmp.l	#0,d7
-	beq	.exitloop
-	sub.l	#1,d7
-	move.w	$dff018,d0
-	btst	#14,d0				; Buffer full, we have a new char
-	beq	.timeoutloop2
-.exitloop:
-	dbf	d6,.loop
-	jmp	(a0)				; Jump to a0
-
-
-
-DumpSerial:				; This is only for PRE-Memory usage. Dumps a string to serialport.
-					; IN:
-					; a0 = String to put out on serial port.
-					; a1 = where to jump after code is run. Remember we have NO stack
-					; meaning that there is no place to store returnadresses for bsr/jsr
-
-
-	move.l	a4,d7				; Copy the value in A4 (temporary data of mousebutttons pressed) to d7
-	btst	#1,d7				; check if LMB on Joyport 1 was pressed. if so. skip serial output.
-	bne	.nomore				; it was pressed. skip all this
-	btst	#4,d7				; Check if we had loopback installed
-	bne	.nomore
-	move.w	#$4000,$dff09a
-	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
-	move.b	#$4f,$bfd000			; Set DTR high
-	move.w	#$0801,$dff09a
-	move.w	#$0801,$dff09c
-
-	clr.l	d7				; Clear d0
-.loop:
-	move.b	(a0)+,d7
-	cmp.b	#0,d7				; end of string?
-	beq	.nomore				; yes
-
-	move.l	#40000,d2			; Load d2 with a timeoutvariable. only test this number of times.
-						; IF CIA for serialport is dead we will not end up in a wait-forever-loop.
-						; and as we cannot use timers. we have to do this dirty style of coding...
-.timeoutloop:	
-	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
-	sub.l	#1,d2				; count down timeout value
-	cmp.l	#0,d2				; if 0, timeout.
-	beq	.endloop
-	move.w	$dff018,d1
-	btst	#13,d1				; Check TBE bit
-	beq.s	.timeoutloop
-.endloop:
-	move.w	#$0100,d1
-	move.b	d7,d1
-	move.w	d1,$dff030			; send it to serial
-	move.w	#$0001,$dff09c			; turn off the TBE bit
-
-	bra.s	.loop
-.nomore:
-	jmp	(a1)				; AS we cannot use RTS (and bsr/jsr) jump here after we are done.
-
-
-DumpSerialChar:				; This is only for PRE-Memory usage. Dumps a string to serialport.
-					; IN:
-					; a0 = pointer to char to print
-					; a1 = where to jump after code is run. Remember we have NO stack
-					; meaning that there is no place to store returnadresses for bsr/jsr
-
-	move.l	a4,d7				; Copy the value in A4 (temporary data of mousebutttons pressed) to d7
-	btst	#1,d7				; check if LMB on Joyport 1 was pressed. if so. skip serial output.
-	bne	.nomore				; it was pressed. skip all this
-	btst	#4,d7				; Check if we had loopback installed
-	bne	.nomore
-
-	move.w	#$4000,$dff09a
-	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
-	move.b	#$4f,$bfd000			; Set DTR high
-	move.w	#$0801,$dff09a
-	move.w	#$0801,$dff09c
-
-	clr.l	d7				; Clear d0
-	move.b	(a0)+,d7
-	move.l	#10000,d2			; Load d2 with a timeoutvariable. only test this number of times.
-						; IF CIA for serialport is dead we will not end up in a wait-forever-loop.
-						; and as we cannot use timers. we have to do this dirty style of coding...
-.timeoutloop:	
-	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
-	sub.l	#1,d2				; count down timeout value
-	cmp.l	#0,d2				; if 0, timeout.
-	beq	.endloop
-	move.w	$dff018,d1
-	btst	#13,d1				; Check TBE bit
-	beq.s	.timeoutloop
-.endloop:
-	move.w	#$0100,d1
-	move.b	d7,d1
-	move.w	d1,$dff030			; send it to serial
-	move.w	#$0001,$dff09c			; turn off the TBE bit
-.nomore:
-	jmp	(a1)				; AS we cannot use RTS (and bsr/jsr) jump here after we are done.
-
-
-Loopbacktest:					; Test if we have a loopbackadapter connected.
-						; Simply by outputing the char in D2 and check if the same char comes back.
-						; if so, 1 is added to D6
-	move.w	#$4000,$dff09a
-	move.w	#373,$dff032			; Set the speed of the serialport (9600BPS)
-	move.b	#$4f,$bfd000			; Set DTR high
-	move.w	#$0801,$dff09a
-	move.w	#$0801,$dff09c
-
-	move.l	#10000,d7			; Load d7 with a timeoutvariable
-.timeoutloop:	
-	move.b	$bfe001,d1			; just read crapdata, we do not care but reading from CIA is slow... for timeout stuff only
-	sub.l	#1,d7				; count down timeout value
-	cmp.l	#0,d7				; if 0, timeout.
-	beq	.endloop
-	move.w	$dff018,d0
-	btst	#13,d0				; Check TBE bit
-	beq.s	.timeoutloop			; Loop until all is ok to send or until timeout hits
-.endloop:
-
-	move.w	#$0100,d1
-	move.b	d2,d1
-	move.w	d1,$dff030			; send it to serial
-	move.w	#$0001,$dff09c			; turn off the TBE bit
-
-
-	move.l	#10000,d7
-
-.timeoutloop2
-	move.b	$bfe001,d0			; Nonsenseread
-	cmp.l	#0,d7
-	beq	.exitloop
-	sub.l	#1,d7
-	move.w	$dff018,d0
-	btst	#14,d0				; Buffer full, we have a new char
-	beq	.timeoutloop2
-	bra	.check
-.exitloop:
-	clr.l	d0
-.check:
-	cmp.b	d0,d2				; Check if in and out was the same char
-	bne.s	.exit				; no so lets exit
-	add.b	#1,d6				; Yes, set d6 to 1
-.exit:
-	jmp	(a0)
-
 
 InputHexNum:					; Inputs a 32 bit hexnumber
 						; INDATA
@@ -11214,13 +13699,13 @@ InputHexNum:					; Inputs a 32 bit hexnumber
 	clr.l	d7				; Clear d7, this is the current position of the string
 	sub.b	#1,d7				; Change d7 so we will force a update of cursor first time
 .loop:
-	bsr	GetMouse
+	jsr	GetMouse
 	cmp.b	#1,RMB-V(a6)
 	beq	.exit
 	cmp.b	#1,LMB-V(a6)
 	beq	.exit
 	bsr	WaitShort
-	bsr	GetChar				; Get a char from keyboard/serial
+	jsr	GetChar				; Get a char from keyboard/serial
 	bsr	WaitLong
 	cmp.b	#"x",d0				; did user press X?
 	beq	.xpressed
@@ -11360,84 +13845,8 @@ InputHexNum:					; Inputs a 32 bit hexnumber
 
 
 
-WaitShort:					; Wait a short time, aprox 10 rasterlines. (or exact IF we have detected working raster)
-	PUSH
-	cmp.b	#1,RASTER-V(a6)			; Check if we have a confirmed working raster
-	beq	.raster
-	move.l	#$1000,d0			; if now.  lets try to wait some anyway.
-	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
-.loop:
-	move.b	$bfe001,d1			; Dummyread from slow memory
-	move.b	$dff006,d1
-	dbf	d0,.loop
-	POP
-	rts
-.raster:
-	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
-	move.b	$dff006,d0			; Get what rasterline we are at now
-	add.b	#10,d0				; Add 10
-.rasterloop:
-	cmp.b	$dff006,d0
-	bne.s	 .rasterloop
-	POP
-	rts
 
 
-WaitLong:					; Wait a short time, aprox 10 rasterlines. (or exact IF we have detected working raster)
-	PUSH
-	cmp.b	#1,RASTER-V(a6)			; Check if we have a confirmed working raster
-	beq	.raster
-	move.w	#3,d1
-	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
-.loop2
-	move.l	#$ffff,d0			; if now.  lets try to wait some anyway.
-.loop:
-	move.b	$bfe001,d2			; Dummyread from slow memory
-	move.b	$dff006,d2
-	dbf	d0,.loop
-	dbf	d1,.loop2
-	POP
-	rts
-
-.raster:
-	cmp.b	#$90,$dff006
-	bne.s	.raster				; Wait for rasterline $90
-
-	bsr	ReadSerial			; as we have no IRQs..  read serialport just in case
-
-.rasterloop:
-	cmp.b	#$8f,$dff006
-	bne.s	 .rasterloop			; Wait for rasterline $8f, meaning we have waited for one frame
-	POP
-	rts
-
-
-DefaultVars:					; Set defualtvalues
-	move.l	a6,d0
-	add.l	#EndData-V,d0
-	move.l	d0,CheckMemEditScreenAdr-V(a6)
-	rts
-
-GetHWReg:					; Dumps all readable HW registers to memory
-	move.w	$dff000,BLTDDAT-V(a6)
-	move.w	$dff002,DMACONR-V(a6)
-	move.w	$dff004,VPOSR-V(a6)
-	move.w	$dff006,VHPOSR-V(a6)
-	move.w	$dff008,DSKDATR-V(a6)
-	move.w	$dff00a,JOY0DAT-V(a6)
-	move.w	$dff00c,JOY1DAT-V(a6)
-	move.w	$dff00e,CLXDAT-V(a6)
-	move.w	$dff010,ADKCONR-V(a6)
-	move.w	$dff012,POT0DAT-V(a6)
-	move.w	$dff014,POT1DAT-V(a6)
-	move.w	$dff016,POTINP-V(a6)
-	move.w	$dff018,SERDATR-V(a6)
-	move.w	$dff01a,DSKBYTR-V(a6)
-	move.w	$dff01c,INTENAR-V(a6)
-	move.w	$dff01e,INTREQR-V(a6)
-	move.w	$dff07c,DENISEID-V(a6)
-	move.w	$dff1da,HHPOSR-V(a6)
-	rts
 
 PrintHWReg:
 	lea	BLTDDATTxt,a0
@@ -13033,7 +15442,7 @@ parfetxt:
 parfdtxt:
 	dc.b	"- Parallel Code $fd - Start of chipmemdetection",$a,$d,0
 parfctxt:
-	dc.b	"- Parallel Code $fc - Start of motherboard fastmemdetection",$a,$d,0
+	dc.b	"- Parallel Code $fc - Start of non autoconfig fastmemdetection (as no chip found/startup check)",$a,$d,0
 parfbtxt:
 	dc.b	"- Parallel Code $fb - Memorydetection done",$a,$d,0
 parfatxt:
@@ -13067,7 +15476,12 @@ writebeven:
 	dc.b	"  - Test of writing byte (even) $ff to $400 ",0
 writebodd:
 	dc.b	"  - Test of writing byte (odd) $ff to $401 ",0
-	
+FastFoundtxt:
+	dc.b	"  - Fastmem found between: $",0
+NoFastFoundtxt:
+	dc.b	"  - No fastmem found, Autoconfig ram NOT checked",$a,$d,0
+OvlTestTxt:
+	dc.b	$a,$d,"Testing if OVL is working: ",0
 
 InitSerial:
 	dc.b	1,2,4,8,16,32,64,128,240,15,170,85,$a,$d,$a,$d
@@ -13119,7 +15533,10 @@ InitP1RMBtxt:
 	dc.b	"P1RMB ",0
 InitP2RMBtxt:
 	dc.b	"P2RMB ",0
-
+BadPaulaTXT:
+	dc.b	"BADPAULA",0
+OvlErrTxt:
+	dc.b	"OVLERROR",0
 InitSerial2:
 	dc.b	$a,$d,$a,$d,"To use serial communication please hold down ANY key now",$a,$d
 	dc.b	"OR click the RIGHT mousebutton.",$a,$d
@@ -13128,6 +15545,10 @@ InitSerial2:
 EndSerial:
 	dc.b	27,"[0m",$a,$d,"No key pressed, disabling any serialcommunications. Enable it in program",$a,$d,0
 
+RomCheckTxt:
+	dc.b	$a,$a,"Doing ROM Checksumtest: (64K blocks, Green OK, Red Failed)",$a,0
+
+
 Ansi:
 	dc.b	27,"[",0
 AnsiNull:
@@ -13135,13 +15556,23 @@ AnsiNull:
 Black:
 	dc.b	27,"[30m",0
 StatusLine:
-	dc.b	"Serial: ",1,1,1,1,1," BPS - CPU: ",1,1,1,1,1," - Chip: ",1,1,1,1,1,1," - KBFast: ",1,1,1,1,1,1," Base: ",0
+	dc.b	"Serial: ",1,1,1,1,1," BPS - CPU: ",1,1,1,1,1,"  - Chip: ",1,1,1,1,1,1," - kBFast: ",1,1,1,1,1,1," Base: ",0
 Space3:
 	dc.b	"   ",0
+CPUTxt:
+	dc.b	$a,"CPU: ",0
+FPUTxt:
+	dc.b	" FPU: ",0
+MMUTxt:
+	dc.b	" MMU: ",0
+REVTxt:
+	dc.b	" Rev: ",0
 
 	EVEN
 	
-CPU:	dc.b	"680x0",0,"68010",0,"68020",0,"68030",0,"68040",0,"68060",0,"68???",0
+CPUString:	dc.b	"68000 ",0,"68010 ",0,"68EC20",0,"68020 ",0,"68EC30",0,"68030 ",0,"68EC40",0,"68LC40",0,"68040 ",0,"68EC60",0,"68LC60",0,"68060 ",0,"68???? ",0,"NOCHIP",0
+FPUString:	dc.b	"NONE ",0,"68881",0,"68882",0,"68040",0,"68060",0
+	EVEN
 
 Bps:
 	dc.l	BpsNone,Bps2400,Bps9600,Bps38400,Bps115200,BpsLoop
@@ -13171,7 +15602,7 @@ SPACE:
 MB:
 	dc.b	"MB",0
 KB:
-	dc.b	"KB",0
+	dc.b	"kB",0
 DOWN:
 	dc.b	"DOWN",0
 UP:
@@ -13192,6 +15623,8 @@ NoLoopback:
 	dc.b	" NOT DETECTED",$a,$d,0
 CANCELED:
 	dc.b	"CANCELED",0
+NOTCHECKED:
+	dc.b	"NOT CHECKED",0
 II:
 	dc.b	" II",0
 III:
@@ -13206,8 +15639,12 @@ OK:
 	dc.b	"OK",0
 BAD:
 	dc.b	"BAD",0
+EXPERIMENTAL:
+	dc.b	" - Experimental: ",0
 MinusTxt:
 	dc.b	" - ",0	
+MinusDTxt:
+	dc.b	" - $",0	
 SPACEOK:
 	dc.b	"   OK",0
 SPACEFAIL:
@@ -13247,6 +15684,31 @@ BFE001Txt:
 	dc.b	"$bfe001: ",0
 BFD100Txt:
 	dc.b	"$bfd100: ",0
+Det24bittxt:
+	dc.b	$a,"Detecting memory in the 24-bit address-space",$a,$a,0
+Det32bittxt:
+	dc.b	$a,"Detecting memory in the 32-bit address-space",$a,$a,0
+No32bittxt:
+	dc.b	$a,"Your CPU does not allow 32-bit addressing, Skipping",$a,$a,0
+Totmemtxt:
+	dc.b	$a,$a,"Total amount of memory detected: ",0
+
+DetMem:
+	dc.b	"Detected ",0
+DetOfmem:
+	dc.b	" of memory between: ",0
+EndMemTxt:
+	dc.b	"End of memorydetection",$a,0
+	
+IfSoldTxt:
+		;12345678901234567890123456789012345678901234567890123456789012345678901234567890
+
+	dc.b	$a,$a,"IF This ROM is sold, if above 10eur+hardware cost 25% MUST be donated to",$a
+	dc.b	"an LEGITIMATE charity of some kind, like curing cancer for example... ",$a
+	dc.b	"If you paid more than 10Eur + Hardware + Shipping, please ask what charity you",$a
+	dc.b	"have supported!!!      This software is fully open source and free to use.",$a
+	dc.b	"Go to www.diagrom.com or http://github.com/ChuckyGang/DiagROM for information",$a,$a,0
+	
 
 	EVEN
 SerSpeeds:		; list of Baudrates (3579545/BPS)+1
@@ -13262,12 +15724,13 @@ MenuKeys:
 	dc.l	MainMenuKey,0,AudioMenuKey,MemtestMenuKey,IRQCIAtestMenuKey,GFXtestMenuKey,PortTestMenuKey,OtherTestKey,DiskTestMenuKey,0,0
 
 MainMenuText:
-	dc.b	"                    DiagROM "
+	dc.b	"                              DiagROM "
 		ifne	a1k
 		dc.b	"A1000 "
 		endc
 	VERSION
-	dc.b	" - Amiga32 Edition"," - "
+	EDITION
+	dc.b	" - "
 	incbin	"ram:BootDate.txt"
 	dc.b	$a
 	dc.b	"                        By John (Chucky / The Gang) Hertell",$a,$a
@@ -13297,9 +15760,9 @@ MainMenu10:
 MainMenuItems:
 	dc.l	MainMenuText,MainMenu1,MainMenu2,MainMenu3,MainMenu4,MainMenu5,MainMenu6,MainMenu7,MainMenu8,MainMenu9,MainMenu10,0,0
 MainMenuCode:
-	dc.l	SystemInfoTest,AudioMenu,MemtestMenu,IRQCIAtestMenu,GFXtestMenu,PortTestMenu,DiskTest,KeyBoardTest,OtherTest,Setup
+	dc.l	SystemInfoTest,AudioMenu,MemtestMenu,IRQCIAtestMenu,GFXtestMenu,PortTestMenu,DiskTest,KeyBoardTest,OtherTest,Setup,SwapMode
 MainMenuKey:	; Keys needed to choose menu. first byte keykode 2:nd byte serialcode.
-	dc.b	"0","1","2","3","4","5","6","7","8","9","s",0
+	dc.b	"0","1","2","3","4","5","6","7","8","s"," ",0
 NotImplTxt:
 	dc.b	2,"This function is not implemented yet. Anyday.. soon(tm), Thursday?",$a,$a,0
 NotA1kTxt:
@@ -13430,7 +15893,7 @@ MemtestMenu4:
 MemtestMenu5:
 	dc.b	"5 - Slow scan of 16MB fastmem-areas",0
 MemtestMenu6:
-	dc.b	"6 - Large Fast scan of fastmem-areas",0
+	dc.b	"6 - Complete Memorydetection",0
 MemtestMenu7:
 	dc.b	"7 - Manual memorytest",0
 MemtestMenu8:
@@ -13438,14 +15901,16 @@ MemtestMenu8:
 MemtestMenu9:
 	dc.b	"9 - Autoconfig - Automatic",0
 MemtestMenu10:
+	dc.b	"x - EXPERIMENTAL New Manual Memorytest",0
+MemtestMenu11:
 	dc.b	"0 - Mainmenu",0
 	EVEN
 MemtestMenuItems:
-	dc.l	MemtestText,MemtestMenu1,MemtestMenu2,MemtestMenu3,MemtestMenu4,MemtestMenu5,MemtestMenu6,MemtestMenu7,MemtestMenu8,MemtestMenu9,MemtestMenu10,0
+	dc.l	MemtestText,MemtestMenu1,MemtestMenu2,MemtestMenu3,MemtestMenu4,MemtestMenu5,MemtestMenu6,MemtestMenu7,MemtestMenu8,MemtestMenu9,MemtestMenu10,MemtestMenu11,0
 MemtestMenuCode:
-	dc.l	CheckDetectedChip,CheckExtendedChip,CheckDetectedMBMem,CheckExtended16MBMem,ForceExtended16MBMem,CheckExtendedMBMem,CheckMemManual,CheckMemEdit,AutoConfig,MainMenu
+	dc.l	CheckDetectedChip,CheckExtendedChip,CheckDetectedMBMem,CheckExtended16MBMem,ForceExtended16MBMem,Detectmem,CheckMemManual,CheckMemEdit,AutoConfig,MemTest,MainMenu
 MemtestMenuKey:
-	dc.b	"1","2","3","4","5","6","7","8","9","0",0
+	dc.b	"1","2","3","4","5","6","7","8","9","x","0",0
 	EVEN
 OtherTestItems:
 	dc.l	OtherTestText,OtherTestMenu1,OtherTestMenu2,OtherTestMenu3,0
@@ -13498,6 +15963,8 @@ MemtextManualModeTxt:
 	dc.b	$a,$a,"Do you want to do a S)low test or a F)ast test?",0
 MemtextManualShadowTxt:
 	dc.b	$a,$a,"Do you want to disable shadowramtest? Y)es",0
+CheckMemNo:
+	dc.b	"Memorypass: ",0
 CheckMemRangeTxt:
 	dc.b	"Checking memory from ",1,1,1,1,1,1,1,1,1," to ",1,1,1,1,1,1,1,1,1," - Press any key/mousebutton to stop",0
 CheckMemCheckAdrTxt:	
@@ -13575,7 +16042,7 @@ CIATestTxt:
 CIATestTxt2:
 	dc.b	2,"Press any key to start tests (2 sec/each), Press ESC for mainmenu",$a,$a,$a,0
 CIATestTxt3:
-	dc.b	2,"Flashing on screen is fully normal, indicating CIA timing",$a,$a
+	dc.b	2,"Flashing on screen is fully normal, indicating CIA timing. NTSC Will give false data",$a,$a
 
 CIAATestAATxt:
 	dc.b	"Testing Timer A, on CIA-A (ODD) :",$a,0
@@ -13619,11 +16086,11 @@ IRQCIAIRQTestText2:
 
 	EVEN
 GFXtestMenuItems:
-	dc.l	GFXtestText,GFXtestMenu1,GFXtestMenu2,GFXtestMenu3,GFXtestMenu4,0
+	dc.l	GFXtestText,GFXtestMenu1,GFXtestMenu2,GFXtestMenu3,GFXtestMenu4,GFXtestMenu5,0
 GFXtestMenuCode:
-	dc.l	GFXTestScreen,GFXtest320x200,GFXTestScroll,MainMenu,0	
+	dc.l	GFXTestScreen,GFXtest320x200,GFXTestScroll,GFXTestRaster,MainMenu,0	
 GFXtestMenuKey:
-	dc.b	"1","2","3","9",0
+	dc.b	"1","2","3","4","9",0
 GFXtestText:
 	dc.b	2,"Graphicstests",$a,$a,0
 GFXtestMenu1:
@@ -13633,10 +16100,15 @@ GFXtestMenu2:
 GFXtestMenu3:
 	dc.b	"3 - Test Scroll",0
 GFXtestMenu4:
+	dc.b	"4 - Test raster (button to exit)",0
+GFXtestMenu5:
 	dc.b	"9 - Exit to mainmenu",0
 GFXtestNoSerial:
 	dc.b	$a,$d,$a,$d,"GRAPHICTEST IN ACTION, Serialoutput is not possible during test",$a,$d,$a,$d,0
-
+GFXtestRasterTxt:
+	dc.b	2,"CPU Busywaiting for raster, flicker is normal.",$a,0
+GFXtestRasterTxt2:
+	dc.b	2,"As testing keys/serial etc takes too much time.",0
 PortTestText:
 	dc.b	2,"Porttests",$a,$a,0
 PortTestMenu1:
@@ -13661,14 +16133,18 @@ DiskTestText:
 DiskTestMenu1:
 	dc.b	"1 - Diskdrivetest",0
 DiskTestMenu2:
+	dc.b	"2 - Gayletest (A600/1200 etc IDE)",0
+DiskTestMenu3:
+	dc.b	"3 - Gary-IDE test (A4000)",0
+DiskTestMenu4:
 	dc.b	"9 - Mainmenu",0
 	EVEN
 DiskTestMenuItems:
-	dc.l	DiskTestText,DiskTestMenu1,DiskTestMenu2,0
+	dc.l	DiskTestText,DiskTestMenu1,DiskTestMenu2,DiskTestMenu3,DiskTestMenu4,0
 DiskTestMenuCode:
-	dc.l	DiskdriveTest,MainMenu
+	dc.l	DiskdriveTest,GayleTest,GayleExp,MainMenu
 DiskTestMenuKey:
-	dc.b	"1","9",0
+	dc.b	"1","2","3","9",0
 
 PortParTest:
 	dc.b	2,"Parallelport tests",$a,$a,0
@@ -13800,6 +16276,9 @@ RTCDay:
 	dc.b	"   Friday",0
 	dc.b	" Saturday",0	
 
+FastDetectTxt:
+	dc.b	$a,$a,"Doing some fastmem detection skipped at start as chip was found",$a
+	dc.b	"Pressing left mousebutton will cancel detection (if hanged)",$a,$a,0
 AutoConfZ2Txt:
 	dc.b	"Scanning Zorro II Area",$a,0
 AutoConfZ3Txt:
@@ -13847,8 +16326,21 @@ AutoConfToomuchTxt:
 	EVEN
 SectorErrorTxt:
 	dc.b	2,"Error finding sector possibly readerror",$a,$a,0
+A24BitTxt:
+	dc.b	"Checking if a 24 Bit address cpu is used: ",0
+A3k4kMemTxt:
+	dc.b	" - Checking for A3000/A4000 Motherboardmemory",$a,0
+CpuMemTxt:
+	dc.b	" - Checking for CPU-Board Memory (most A3k/A4k)",$a,0
+A1200CpuMemTxt:
+	dc.b	" - Checking for CPU-Board Memory (most A1200)",$a,0
+a24BitAreaTxt:
+	dc.b	" - Checking for Memory in 24 Bit area (NON AUTOCONFIG)",$a,0
+FakeFastTxt:
+	dc.b	" - Checking for Memory in Ranger or Fakefast area",$a,0
 
-
+BPPCtxt:
+	dc.b	"   - BPPC Found, detecting in a smaller memoryarea",$a,0
 S8MB:
 	dc.b	"8MB",0
 S64k:
@@ -13881,7 +16373,8 @@ S1GB:
 	dc.b	"1GB",0
 SRes:
 	dc.b	"RESERVED",0
-
+TryTxt:
+	dc.b	" Try: ",0
 	EVEN
 SizeTxtPointer:
 	dc.l	S8MB,S64k,S128k,S256k,S512k,S1MB,S2MB,S4MB
@@ -13892,7 +16385,54 @@ ExtSizeTxtPointer:
 ExtSizePointer:
 	dc.l	$1000000,$2000000,$4000000,$8000000,$10000000,$20000000,$40000000,$80000000
 
-	
+
+GayleCheckMirrorTxt:
+	dc.b	"Gayle test (built-in IDE Controller check)",$a,$d,$a,$d
+	dc.b	"Checking for a chipset mirror: ",0
+IDEInterruptCheck:
+	dc.b	"    Checking if we have a pending IDE Interrupt.",$a,$d,0
+IDEInterruptDetected:
+	dc.b	"    IDE Interrupt Detected",$a,$d,0
+IDEInterruptCleared:
+	dc.b	"    IDE Interrupt Cleared at the drive",$a,$d,0
+IDEInterruptChangedReading:
+	dc.b	"    Reading Gayle IntChanged: ",0
+IDEInterruptStatusReading:
+	dc.b	"   Reading Gayle IntStatus: ",0
+GayleMirrorTxt:
+	dc.b	"Mirror Detected",$a,$d,0
+GayleNoMirrorTxt:
+	dc.b	"Mirror Not Detected",$a,$d,0
+A600Txt:
+	dc.b	" - A600 Gayle",0
+A1200Txt:
+	dc.b	" - A1200 Gayle",0
+UnknownTxt:
+	dc.b	" - Unknown Gayle",0
+NoDiskTxt:
+	dc.b	$a,$d,$a,$d,"No disk found",$a,$d,0
+NoGayleTxt:
+	dc.b	$a,$d,$a,$d,"No Gayle detected",$a,$d,0
+GayleIDETxt:
+	dc.b	"IDE Interface found (Running IDE Tests)",$a,$d,0
+GayleNoIDETxt:
+	dc.b	"NO IDE Interface found",$a,$d,0
+GayleVerTxt:
+	dc.b	"Reading Gayleversion: ",0
+GayleRDYTxt:
+	dc.b	"    Waiting for Drive RDY (Mask 0xc1): ",0
+GayleIDERead:
+	dc.b	"    Reading data from drive: ",0
+IDESurfacesTxt:
+	dc.b	"Surfaces: ",0
+IDESectorsTxt:
+	dc.b	" Sectors: ",0
+IDECylindersTxt:
+	dc.b	" Cylinders: ",0
+IDEBlkSize:
+	dc.b	" Blocksize: ",0
+IDEUnitTxt:
+	dc.b	"Unitname: ",0
 DividerTxt:
 	dc.b	"--------------------------------------------------------------------------------",0
 EmptyRowTxt:
@@ -13988,10 +16528,12 @@ DebugROM:
 	dc.b	"Is $1114 readable at addr $0 (ROM still at $0): ",0
 DebugROM2:	
 	dc.b	"Is $1114 readable at addr $f80000 (Real ROM addr): ",0
-	
+DebugROM3:
+	dc.b	$a,"Is $1111 readable at addr $f00000 (expansion ROM addr): ",0	
 HaltTxt:
 	dc.b	$a,$d,"PANIC! System halted, not enough resources found to generate better dump",$a,$d,0
-	
+StuckButtons:
+	dc.b	$a,$d,"Stuck buttons & keys etc at boot: ",0
 	EVEN
 HexTxt:
 	dc.b	"HEX: ",0
@@ -14015,7 +16557,7 @@ PinTxt:
 Base1Txt:
 	dc.b	$a,$d,"  Using $",0
 Base2Txt:
-	dc.b	" as start of workmem",$a,$d,$a,$d,0
+	dc.b	" as start of workmem (Base)",$a,$d,$a,$d,0
 UnderDevTxt:
 	dc.b	2,"This function is under development, output can be weird, strange and false",$a,$d,$a,$d,0
 NoChiptxt:
@@ -14187,7 +16729,12 @@ TestPic:
 	incbin	"DiagRom/TestPIC.raw"
 EndTestPic:
 	endc
-	EVEN
+	dc.b	"Checksums:"
+	CNOP	0,4			; Start at even LONGWORD
+Checksums:		; Numbers here fits my Kickstart 3.1 rom.
+	dc.l	$88ff8999,$27445220,$bf491a45,$f83fe9c5,$1e97ca1e,$7f55b19b,$924d1d33,$67f7f730
+EndChecksums:
+
 EndMusic:
 	dc.b	"This is the brutal end of this ROM, everything after this are just pure noise.    End of Code...",0
 
@@ -14318,6 +16865,8 @@ ChipUnreserved:
 	dc.l	0			; Total of UNRESERVED Chipmem detected
 ChipUnreservedAddr:
 	dc.l	0			; END of the Unreserved space
+FastBlocksAtBoot:
+	dc.l	0			; amount of fastmemblocks found at boot
 GetChipAddr:
 	dc.l	0			; Response from GetChip routine
 TotalChip:				; Total Chipmem detected
@@ -14382,8 +16931,14 @@ STUCKP1MMB:
 	dc.b	0	; if not 0, MMB port1 stuck and should be ignored
 STUCKP2MMB:
 	dc.b	0	; if not 0, MMB port1 stuck and should be ignored
+DISPAULA:
+	dc.b	0	; if not 0, Paula seems bad. no paulatests should be done to check keypresses etc.
+OVLErr:
+	dc.b	0	; Store if we had OVL Error
 RASTER:
 	dc.b	0	; if not 0, We have detected working raster
+SCRNMODE:
+	dc.b	0	; If 0, we are in PAL (50Hz) screenmode, any other we have NTSC (60Hz)
 SerData:
 	dc.b	0	; if 0  we had no serialdata
 Serial:
@@ -14435,6 +16990,8 @@ PortJoy0OLD:
 	dc.l	0
 PortJoy1OLD:
 	dc.l	0
+PowerONStatus:
+	dc.l	0	; Poweron Status
 SerTstBps:
 	dc.w	0	; BPS of serialtest
 OldMarkItem:
@@ -14589,6 +17146,12 @@ GfxChipset:
 	EVEN
 BootMBFastmem:				; Amount of motherboard fastmem detected at bootpoint
 	dc.l	0
+FastMem:
+	dc.l	0			; Variable for fastmem found during init with screen.
+DetectMemRnd:
+	dc.l	0			; used as a flag to tag for shadowram
+FastmemBlock:
+	dc.l	0			; Number of fastmem memblocks found when doing detection in menus
 CheckMemFrom:
 	dc.l	0			; Startaddress of memory to check
 CheckMemTo:
@@ -14646,6 +17209,12 @@ CheckMemEditOldYpos:
 	dc.b	0			; Old Y pos of cursor
 CheckMemEditCharPos:
 	dc.b	0			; Current pos to edit memory.  0 or 1, 0 = high nibble, 1 = low)
+
+	EVEN
+
+MemTestPass:
+	dc.l	0			; Number of passes in memorycheck
+
 KeyBOld:
 	dc.b	0			; Stores old scancode of keyboard
 
@@ -14734,6 +17303,32 @@ CIAAPRA:
 	dc.w	0
 Passno:
 	dc.l	0
+CPU:
+	dc.l	0			; Type of CPU
+CPUGen:
+	dc.l	0			; Generation of CPU
+FPU:
+	dc.l	0			; Type of FPU
+PCRReg:
+	dc.l	0			; Value of PCRReg IF 060, if not, this is 0
+CPU060Rev:
+	dc.b	0			; Revision of 060 cpu
+MMU:
+	dc.b	0			; if 0, there is no MMU
+ADR24BIT:
+	dc.b	0			; if 0 no 24 bit address cpu.
+	EVEN
+CPUPointer:
+	dc.l	0			; Pointer to CPU String
+FPUPointer:
+	dc.l	0			; Pointer to FPU String
+
+	EVEN
+GayleData:
+	dc.l	0			; Data from gayletest
+DiskBuffer:
+	dc.l	0			; Pointer to diskbuffer in disktests
+
 GfxTestBpl:				; Pointers to bitplanes for gfxtest
 	dc.l	0,0,0,0,0,0,0,0
 SHIT:
@@ -14820,8 +17415,6 @@ ptplay:
 	EVEN
 
 
-	dc.b	"This is the brutal end of this ROM, everything after this are just pure noise.    End of Code...",0
-	EVEN
 EndData:
 	dc.l	0
 
@@ -14841,6 +17434,60 @@ irq4:	dc.l	0
 irq5:	dc.l	0
 irq6:	dc.l	0
 irq7:	dc.l	0
+
+SaveBusError:
+	dc.l	0
+SaveAddressError:
+	dc.l	0
+SaveIllegalError:
+	dc.l	0
+SaveDivByZero:
+	dc.l	0
+SaveChkInst:
+	dc.l	0
+SaveTrapV:
+	dc.l	0
+SavePrivViol:
+	dc.l	0
+SaveTrace:
+	dc.l	0
+SaveUnimplInst:
+	dc.l	0
+SaveUnimplInst2:
+	dc.l	0
+SaveTrap:
+	dc.l	0
+SaveTrap2:
+	dc.l	0
+SaveTrap3:
+	dc.l	0
+SaveTrap4:
+	dc.l	0
+SaveTrap5:
+	dc.l	0
+SaveTrap6:
+	dc.l	0
+SaveTrap7:
+	dc.l	0
+SaveTrap8:
+	dc.l	0
+SaveTrap9:
+	dc.l	0
+SaveTrap10:
+	dc.l	0
+SaveTrap11:
+	dc.l	0
+SaveTrap12:
+	dc.l	0
+SaveTrap13:
+	dc.l	0
+SaveTrap14:
+	dc.l	0
+SaveTrap15:
+	dc.l	0
+SaveTrap16:
+	dc.l	0
+
 
 
 graph:
